@@ -1,22 +1,27 @@
 from fastapi import FastAPI
+from backend.app.core.config import get_settings
 
-# Create the application
+settings = get_settings()
+
 app = FastAPI(
-    title="AEM Content Updater",
+    title=settings.APP_NAME,
     description="Enterprise tool to discover and update AEM components",
-    version="0.1.0"
+    version=settings.APP_VERSION
 )
 
-# Simple health check endpoint
 @app.get("/")
 def home():
     return {
-        "message": "AEM Content Updater API is running successfully!",
+        "message": f"{settings.APP_NAME} is running successfully!",
         "status": "healthy",
-        "version": "0.1.0"
+        "version": settings.APP_VERSION,
+        "debug_mode": settings.DEBUG
     }
 
-# Another simple test endpoint
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "app": settings.APP_NAME,
+        "version": settings.APP_VERSION
+    }
