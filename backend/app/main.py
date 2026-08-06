@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from backend.app.core.config import get_settings
+from backend.app.services.aem_client import AEMClient
 
 settings = get_settings()
 
@@ -25,3 +26,11 @@ def health_check():
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION
     }
+
+@app.get("/api/aem/status")
+def aem_status():
+    """
+    Check if we can successfully connect to AEM
+    """
+    client = AEMClient()
+    return client.is_reachable()
