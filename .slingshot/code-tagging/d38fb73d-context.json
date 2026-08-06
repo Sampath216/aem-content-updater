@@ -1,0 +1,31 @@
+{
+  "filename": "aem_client.py",
+  "path": "backend\\app\\services\\aem_client.py",
+  "version": "1.1",
+  "files": {
+    "6c321d92": {
+      "value": [
+        {
+          "programming_language": "Python",
+          "fileName": "aem_client.py",
+          "relativeFilePath": "backend/app/services/aem_client.py",
+          "startLine": [
+            1
+          ],
+          "endLine": [
+            176
+          ]
+        }
+      ]
+    }
+  },
+  "promptMessage": {
+    "ff1c32b7": {
+      "value": "still there were 2 errors"
+    }
+  },
+  "localPrompts": {},
+  "remotePrompts": {},
+  "figma": {},
+  "jira": {}
+}

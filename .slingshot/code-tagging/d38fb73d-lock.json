@@ -1,0 +1,920 @@
+{
+  "backend\\app\\services\\aem_client.py": {
+    "filename": "aem_client.py",
+    "path": "backend\\app\\services\\aem_client.py",
+    "version": "1.2",
+    "contextFile": null,
+    "chunks": {
+      "37b3e8": {
+        "user": "Bavigadda Kumar",
+        "model": "gpt-4.1",
+        "timestamp": 1786019636,
+        "platform": "VisualStudioCode",
+        "product": "AIPP",
+        "productVersion": "3.0.0",
+        "source": "chat",
+        "type": "insertCode",
+        "extraContext": {
+          "promptMessage": "ff1c32b7",
+          "files": "6c321d92"
+        },
+        "hash": "6f98f15f",
+        "messageId": "system_e6d70520-9192-11f1-92ad-cb4b34c4bc59",
+        "codeBlockId": "system_e6d70520-9192-11f1-92ad-cb4b34c4bc59-Codeblock-1",
+        "isActive": true,
+        "hoverData": "\n### Slingshot Generated Code\n\n- **user**: Bavigadda Kumar\n- **model**: gpt-4.1\n- **timestamp**: 8/6/2026, 6:03:56 PM\n- **source**: chat\n- **type**: insertCode\n"
+      }
+    },
+    "lines": {
+      "0": {
+        "chunkId": "37b3e8",
+        "hash": "7b7b0efb",
+        "encoded": "import%20requests",
+        "prevChunkIds": []
+      },
+      "1": {
+        "chunkId": "37b3e8",
+        "hash": "a709cc90",
+        "encoded": "from%20requests.auth%20import%20HTTPBasicAuth",
+        "prevChunkIds": []
+      },
+      "2": {
+        "chunkId": "37b3e8",
+        "hash": "51e1acb9",
+        "encoded": "from%20backend.app.core.config%20import%20get_settings",
+        "prevChunkIds": []
+      },
+      "3": {
+        "chunkId": "37b3e8",
+        "hash": "e5fd850a",
+        "encoded": "import%20logging",
+        "prevChunkIds": []
+      },
+      "5": {
+        "chunkId": "37b3e8",
+        "hash": "84438c86",
+        "encoded": "#%20Set%20up%20basic%20logging",
+        "prevChunkIds": []
+      },
+      "6": {
+        "chunkId": "37b3e8",
+        "hash": "3b4750bd",
+        "encoded": "logging.basicConfig(level=logging.INFO)",
+        "prevChunkIds": []
+      },
+      "7": {
+        "chunkId": "37b3e8",
+        "hash": "06a03cc1",
+        "encoded": "logger%20=%20logging.getLogger(__name__)",
+        "prevChunkIds": []
+      },
+      "9": {
+        "chunkId": "37b3e8",
+        "hash": "44f25546",
+        "encoded": "settings%20=%20get_settings()",
+        "prevChunkIds": []
+      },
+      "11": {
+        "chunkId": "37b3e8",
+        "hash": "f56feb99",
+        "encoded": "class%20AEMClient:",
+        "prevChunkIds": []
+      },
+      "12": {
+        "chunkId": "37b3e8",
+        "hash": "9e075249",
+        "encoded": "%22%22%22",
+        "prevChunkIds": []
+      },
+      "13": {
+        "chunkId": "37b3e8",
+        "hash": "8dcb1191",
+        "encoded": "Professional%20client%20to%20communicate%20with%20Adobe%20Experience%20Manager.",
+        "prevChunkIds": []
+      },
+      "14": {
+        "chunkId": "37b3e8",
+        "hash": "29ea1003",
+        "encoded": "Handles%20authentication,%20timeouts,%20and%20basic%20error%20handling.",
+        "prevChunkIds": []
+      },
+      "15": {
+        "chunkId": "37b3e8",
+        "hash": "4b9061e8",
+        "encoded": "%22%22%22",
+        "prevChunkIds": []
+      },
+      "17": {
+        "chunkId": "37b3e8",
+        "hash": "0c647774",
+        "encoded": "def%20__init__(self):",
+        "prevChunkIds": []
+      },
+      "19": {
+        "chunkId": "37b3e8",
+        "hash": "a93e3d0c",
+        "encoded": "self.base_url%20=%20settings.AEM_BASE_URL.rstrip(%22/%22)",
+        "prevChunkIds": []
+      },
+      "20": {
+        "chunkId": "37b3e8",
+        "hash": "869b7909",
+        "encoded": "self.auth%20=%20HTTPBasicAuth(settings.AEM_USERNAME,%20settings.AEM_PASSWORD)",
+        "prevChunkIds": []
+      },
+      "21": {
+        "chunkId": "37b3e8",
+        "hash": "03da89f3",
+        "encoded": "self.timeout%20=%20settings.REQUEST_TIMEOUT",
+        "prevChunkIds": []
+      },
+      "22": {
+        "chunkId": "37b3e8",
+        "hash": "a0f5b7cc",
+        "encoded": "self.session%20=%20requests.Session()",
+        "prevChunkIds": []
+      },
+      "23": {
+        "chunkId": "37b3e8",
+        "hash": "f4a97829",
+        "encoded": "self.session.auth%20=%20self.auth",
+        "prevChunkIds": []
+      },
+      "26": {
+        "chunkId": "37b3e8",
+        "hash": "893fe521",
+        "encoded": "def%20is_reachable(self)%20-%3E%20dict:",
+        "prevChunkIds": []
+      },
+      "27": {
+        "chunkId": "37b3e8",
+        "hash": "5fd70038",
+        "encoded": "%22%22%22",
+        "prevChunkIds": []
+      },
+      "28": {
+        "chunkId": "37b3e8",
+        "hash": "2cc3a42e",
+        "encoded": "Check%20if%20AEM%20is%20reachable%20and%20credentials%20are%20correct.",
+        "prevChunkIds": []
+      },
+      "29": {
+        "chunkId": "37b3e8",
+        "hash": "13a97e59",
+        "encoded": "Returns%20a%20clear%20status%20dictionary.",
+        "prevChunkIds": []
+      },
+      "30": {
+        "chunkId": "37b3e8",
+        "hash": "a015f352",
+        "encoded": "%22%22%22",
+        "prevChunkIds": []
+      },
+      "31": {
+        "chunkId": "37b3e8",
+        "hash": "ba04ebc7",
+        "encoded": "try:",
+        "prevChunkIds": []
+      },
+      "33": {
+        "chunkId": "37b3e8",
+        "hash": "1ce829a8",
+        "encoded": "url%20=%20f%22%7Bself.base_url%7D/libs/granite/core/content/login.html%22",
+        "prevChunkIds": []
+      },
+      "34": {
+        "chunkId": "37b3e8",
+        "hash": "922d8030",
+        "encoded": "response%20=%20self.session.get(url,%20timeout=self.timeout)",
+        "prevChunkIds": []
+      },
+      "35": {
+        "chunkId": "37b3e8",
+        "hash": "29c5b270",
+        "encoded": "if%20response.status_code%20==%20200:",
+        "prevChunkIds": []
+      },
+      "36": {
+        "chunkId": "37b3e8",
+        "hash": "95aa6637",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "37": {
+        "chunkId": "37b3e8",
+        "hash": "f5feb68c",
+        "encoded": "%22status%22:%20%22success%22,",
+        "prevChunkIds": []
+      },
+      "38": {
+        "chunkId": "37b3e8",
+        "hash": "6212ed25",
+        "encoded": "%22message%22:%20%22Successfully%20connected%20to%20AEM%22,",
+        "prevChunkIds": []
+      },
+      "39": {
+        "chunkId": "37b3e8",
+        "hash": "bc0f7742",
+        "encoded": "%22aem_url%22:%20self.base_url,",
+        "prevChunkIds": []
+      },
+      "40": {
+        "chunkId": "37b3e8",
+        "hash": "60d8523d",
+        "encoded": "%22status_code%22:%20response.status_code",
+        "prevChunkIds": []
+      },
+      "41": {
+        "chunkId": "37b3e8",
+        "hash": "98f83ab6",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      },
+      "42": {
+        "chunkId": "37b3e8",
+        "hash": "dad8df26",
+        "encoded": "else:",
+        "prevChunkIds": []
+      },
+      "43": {
+        "chunkId": "37b3e8",
+        "hash": "33e9c7a9",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "44": {
+        "chunkId": "37b3e8",
+        "hash": "86b6ec16",
+        "encoded": "%22status%22:%20%22error%22,",
+        "prevChunkIds": []
+      },
+      "45": {
+        "chunkId": "37b3e8",
+        "hash": "a82d06e3",
+        "encoded": "%22message%22:%20f%22AEM%20responded%20with%20status%20code%20%7Bresponse.status_code%7D%22,",
+        "prevChunkIds": []
+      },
+      "46": {
+        "chunkId": "37b3e8",
+        "hash": "ca098728",
+        "encoded": "%22aem_url%22:%20self.base_url,",
+        "prevChunkIds": []
+      },
+      "47": {
+        "chunkId": "37b3e8",
+        "hash": "f836d9c8",
+        "encoded": "%22status_code%22:%20response.status_code",
+        "prevChunkIds": []
+      },
+      "48": {
+        "chunkId": "37b3e8",
+        "hash": "d90811a0",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      },
+      "49": {
+        "chunkId": "37b3e8",
+        "hash": "ee424f33",
+        "encoded": "except%20requests.exceptions.ConnectionError:",
+        "prevChunkIds": []
+      },
+      "51": {
+        "chunkId": "37b3e8",
+        "hash": "b66eba41",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "52": {
+        "chunkId": "37b3e8",
+        "hash": "fa0a42da",
+        "encoded": "%22status%22:%20%22error%22,",
+        "prevChunkIds": []
+      },
+      "53": {
+        "chunkId": "37b3e8",
+        "hash": "3cb5ea84",
+        "encoded": "%22message%22:%20%22Cannot%20connect%20to%20AEM.%20Is%20it%20running?%22,",
+        "prevChunkIds": []
+      },
+      "54": {
+        "chunkId": "37b3e8",
+        "hash": "61c1c313",
+        "encoded": "%22aem_url%22:%20self.base_url",
+        "prevChunkIds": []
+      },
+      "55": {
+        "chunkId": "37b3e8",
+        "hash": "2ef1d392",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      },
+      "56": {
+        "chunkId": "37b3e8",
+        "hash": "47c857fd",
+        "encoded": "except%20requests.exceptions.Timeout:",
+        "prevChunkIds": []
+      },
+      "58": {
+        "chunkId": "37b3e8",
+        "hash": "275574d3",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "59": {
+        "chunkId": "37b3e8",
+        "hash": "e09b2521",
+        "encoded": "%22status%22:%20%22error%22,",
+        "prevChunkIds": []
+      },
+      "60": {
+        "chunkId": "37b3e8",
+        "hash": "31e38b4c",
+        "encoded": "%22message%22:%20%22Connection%20to%20AEM%20timed%20out%22,",
+        "prevChunkIds": []
+      },
+      "61": {
+        "chunkId": "37b3e8",
+        "hash": "cf96aad4",
+        "encoded": "%22aem_url%22:%20self.base_url",
+        "prevChunkIds": []
+      },
+      "62": {
+        "chunkId": "37b3e8",
+        "hash": "646a8e84",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      },
+      "63": {
+        "chunkId": "37b3e8",
+        "hash": "d051f163",
+        "encoded": "except%20Exception%20as%20e:",
+        "prevChunkIds": []
+      },
+      "64": {
+        "chunkId": "37b3e8",
+        "hash": "2fac70d3",
+        "encoded": "logger.error(f%22Unexpected%20error:%20%7Bstr(e)%7D%22)",
+        "prevChunkIds": []
+      },
+      "65": {
+        "chunkId": "37b3e8",
+        "hash": "30ecdaf8",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "66": {
+        "chunkId": "37b3e8",
+        "hash": "759f0990",
+        "encoded": "%22status%22:%20%22error%22,",
+        "prevChunkIds": []
+      },
+      "67": {
+        "chunkId": "37b3e8",
+        "hash": "c2e72752",
+        "encoded": "%22message%22:%20f%22Unexpected%20error:%20%7Bstr(e)%7D%22,",
+        "prevChunkIds": []
+      },
+      "68": {
+        "chunkId": "37b3e8",
+        "hash": "8205232c",
+        "encoded": "%22aem_url%22:%20self.base_url",
+        "prevChunkIds": []
+      },
+      "69": {
+        "chunkId": "37b3e8",
+        "hash": "9b4a30da",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      },
+      "72": {
+        "chunkId": "37b3e8",
+        "hash": "9498b0e1",
+        "encoded": "def%20get_page_content(self,%20page_path:%20str)%20-%3E%20dict:",
+        "prevChunkIds": []
+      },
+      "73": {
+        "chunkId": "37b3e8",
+        "hash": "a0578ba6",
+        "encoded": "%22%22%22",
+        "prevChunkIds": []
+      },
+      "74": {
+        "chunkId": "37b3e8",
+        "hash": "1a867c35",
+        "encoded": "Fetch%20basic%20information%20about%20a%20page.",
+        "prevChunkIds": []
+      },
+      "75": {
+        "chunkId": "37b3e8",
+        "hash": "d4b0af1a",
+        "encoded": "Example%20path:%20/content/we-retail/us/en",
+        "prevChunkIds": []
+      },
+      "76": {
+        "chunkId": "37b3e8",
+        "hash": "5b0622ee",
+        "encoded": "%22%22%22",
+        "prevChunkIds": []
+      },
+      "77": {
+        "chunkId": "37b3e8",
+        "hash": "c161dcd7",
+        "encoded": "try:",
+        "prevChunkIds": []
+      },
+      "78": {
+        "chunkId": "37b3e8",
+        "hash": "bbb9a7cf",
+        "encoded": "#%20Request%20the%20page%20in%20JSON%20format%20(Sling%20default)",
+        "prevChunkIds": []
+      },
+      "79": {
+        "chunkId": "37b3e8",
+        "hash": "d58da021",
+        "encoded": "url%20=%20f%22%7Bself.base_url%7D%7Bpage_path%7D.json%22",
+        "prevChunkIds": []
+      },
+      "80": {
+        "chunkId": "37b3e8",
+        "hash": "c835beb2",
+        "encoded": "response%20=%20self.session.get(url,%20timeout=self.timeout)",
+        "prevChunkIds": []
+      },
+      "81": {
+        "chunkId": "37b3e8",
+        "hash": "2d35f50f",
+        "encoded": "if%20response.status_code%20==%20200:",
+        "prevChunkIds": []
+      },
+      "82": {
+        "chunkId": "37b3e8",
+        "hash": "2dc9d01b",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "83": {
+        "chunkId": "37b3e8",
+        "hash": "3708d2c5",
+        "encoded": "%22status%22:%20%22success%22,",
+        "prevChunkIds": []
+      },
+      "84": {
+        "chunkId": "37b3e8",
+        "hash": "a682db55",
+        "encoded": "%22path%22:%20page_path,",
+        "prevChunkIds": []
+      },
+      "85": {
+        "chunkId": "37b3e8",
+        "hash": "cdd12fa0",
+        "encoded": "%22data%22:%20response.json()",
+        "prevChunkIds": []
+      },
+      "86": {
+        "chunkId": "37b3e8",
+        "hash": "9c0e6ebc",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      },
+      "87": {
+        "chunkId": "37b3e8",
+        "hash": "d2288b2b",
+        "encoded": "else:",
+        "prevChunkIds": []
+      },
+      "88": {
+        "chunkId": "37b3e8",
+        "hash": "69c9c7e7",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "89": {
+        "chunkId": "37b3e8",
+        "hash": "89073bc5",
+        "encoded": "%22status%22:%20%22error%22,",
+        "prevChunkIds": []
+      },
+      "90": {
+        "chunkId": "37b3e8",
+        "hash": "837e3eb9",
+        "encoded": "%22message%22:%20f%22Failed%20to%20fetch%20page.%20Status%20code:%20%7Bresponse.status_code%7D%22,",
+        "prevChunkIds": []
+      },
+      "91": {
+        "chunkId": "37b3e8",
+        "hash": "b4e62fe4",
+        "encoded": "%22path%22:%20page_path,",
+        "prevChunkIds": []
+      },
+      "92": {
+        "chunkId": "37b3e8",
+        "hash": "5b77b099",
+        "encoded": "%22status_code%22:%20response.status_code",
+        "prevChunkIds": []
+      },
+      "93": {
+        "chunkId": "37b3e8",
+        "hash": "94b19f35",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      },
+      "94": {
+        "chunkId": "37b3e8",
+        "hash": "88adb388",
+        "encoded": "except%20Exception%20as%20e:",
+        "prevChunkIds": []
+      },
+      "95": {
+        "chunkId": "37b3e8",
+        "hash": "d1792b45",
+        "encoded": "logger.error(f%22Error%20fetching%20page%20content%20for%20%7Bpage_path%7D:%20%7Bstr(e)%7D%22)",
+        "prevChunkIds": []
+      },
+      "96": {
+        "chunkId": "37b3e8",
+        "hash": "b3116b29",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "97": {
+        "chunkId": "37b3e8",
+        "hash": "26bdd521",
+        "encoded": "%22status%22:%20%22error%22,",
+        "prevChunkIds": []
+      },
+      "98": {
+        "chunkId": "37b3e8",
+        "hash": "7be73a72",
+        "encoded": "%22message%22:%20str(e),",
+        "prevChunkIds": []
+      },
+      "99": {
+        "chunkId": "37b3e8",
+        "hash": "25e4338b",
+        "encoded": "%22path%22:%20page_path",
+        "prevChunkIds": []
+      },
+      "100": {
+        "chunkId": "37b3e8",
+        "hash": "020d2fe1",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      },
+      "105": {
+        "chunkId": "37b3e8",
+        "hash": "232450fc",
+        "encoded": "%22%22%22",
+        "prevChunkIds": []
+      },
+      "106": {
+        "chunkId": "37b3e8",
+        "hash": "5312c2fb",
+        "encoded": "Discover%20components%20under%20a%20page%20using%20controlled%20depth%20(safer%20than%20infinity.json).",
+        "prevChunkIds": []
+      },
+      "107": {
+        "chunkId": "37b3e8",
+        "hash": "f358063d",
+        "encoded": "Avoids%20the%20HTTP%20300%20problem%20that%20happens%20with%20large%20pages.",
+        "prevChunkIds": []
+      },
+      "108": {
+        "chunkId": "37b3e8",
+        "hash": "a9d3d900",
+        "encoded": "%22%22%22",
+        "prevChunkIds": []
+      },
+      "109": {
+        "chunkId": "37b3e8",
+        "hash": "358df0ff",
+        "encoded": "try:",
+        "prevChunkIds": []
+      },
+      "110": {
+        "chunkId": "37b3e8",
+        "hash": "6d9fe2f3",
+        "encoded": "components%20=%20%5B%5D",
+        "prevChunkIds": []
+      },
+      "112": {
+        "chunkId": "37b3e8",
+        "hash": "51c2600e",
+        "encoded": "def%20walk(current_path:%20str,%20current_depth:%20int):",
+        "prevChunkIds": []
+      },
+      "114": {
+        "chunkId": "37b3e8",
+        "hash": "6a4238c3",
+        "encoded": "return",
+        "prevChunkIds": []
+      },
+      "116": {
+        "chunkId": "37b3e8",
+        "hash": "82ba51ba",
+        "encoded": "#%20Request%20only%20one%20level%20at%20a%20time%20(.1.json%20is%20safe%20and%20fast)",
+        "prevChunkIds": []
+      },
+      "117": {
+        "chunkId": "37b3e8",
+        "hash": "785206a0",
+        "encoded": "url%20=%20f%22%7Bself.base_url%7D%7Bcurrent_path%7D.1.json%22",
+        "prevChunkIds": []
+      },
+      "118": {
+        "chunkId": "37b3e8",
+        "hash": "31fee8cd",
+        "encoded": "try:",
+        "prevChunkIds": []
+      },
+      "119": {
+        "chunkId": "37b3e8",
+        "hash": "c7833239",
+        "encoded": "response%20=%20self.session.get(url,%20timeout=self.timeout)",
+        "prevChunkIds": []
+      },
+      "120": {
+        "chunkId": "37b3e8",
+        "hash": "e225edca",
+        "encoded": "except%20Exception:",
+        "prevChunkIds": []
+      },
+      "121": {
+        "chunkId": "37b3e8",
+        "hash": "30d26c64",
+        "encoded": "return",
+        "prevChunkIds": []
+      },
+      "123": {
+        "chunkId": "37b3e8",
+        "hash": "3736a7a4",
+        "encoded": "if%20response.status_code%20!=%20200:",
+        "prevChunkIds": []
+      },
+      "124": {
+        "chunkId": "37b3e8",
+        "hash": "e01066ac",
+        "encoded": "return",
+        "prevChunkIds": []
+      },
+      "126": {
+        "chunkId": "37b3e8",
+        "hash": "9bbb1c6e",
+        "encoded": "try:",
+        "prevChunkIds": []
+      },
+      "127": {
+        "chunkId": "37b3e8",
+        "hash": "812164e5",
+        "encoded": "node%20=%20response.json()",
+        "prevChunkIds": []
+      },
+      "128": {
+        "chunkId": "37b3e8",
+        "hash": "8e4efd92",
+        "encoded": "except%20Exception:",
+        "prevChunkIds": []
+      },
+      "129": {
+        "chunkId": "37b3e8",
+        "hash": "313c5ca0",
+        "encoded": "return",
+        "prevChunkIds": []
+      },
+      "131": {
+        "chunkId": "37b3e8",
+        "hash": "7ea74fe5",
+        "encoded": "if%20not%20isinstance(node,%20dict):",
+        "prevChunkIds": []
+      },
+      "132": {
+        "chunkId": "37b3e8",
+        "hash": "3e61db75",
+        "encoded": "return",
+        "prevChunkIds": []
+      },
+      "134": {
+        "chunkId": "37b3e8",
+        "hash": "344d37de",
+        "encoded": "resource_type%20=%20node.get(%22sling:resourceType%22)",
+        "prevChunkIds": []
+      },
+      "136": {
+        "chunkId": "37b3e8",
+        "hash": "240b1a97",
+        "encoded": "#%20Collect%20the%20component%20if%20it%20has%20a%20resourceType",
+        "prevChunkIds": []
+      },
+      "137": {
+        "chunkId": "37b3e8",
+        "hash": "6eaa2b11",
+        "encoded": "if%20resource_type%20and%20resource_type%20not%20in%20%5B%22cq/Page%22,%20%22cq/PageContent%22%5D:",
+        "prevChunkIds": []
+      },
+      "138": {
+        "chunkId": "37b3e8",
+        "hash": "aa4194dd",
+        "encoded": "title%20=%20(",
+        "prevChunkIds": []
+      },
+      "139": {
+        "chunkId": "37b3e8",
+        "hash": "1d699bc0",
+        "encoded": "node.get(%22jcr:title%22)",
+        "prevChunkIds": []
+      },
+      "140": {
+        "chunkId": "37b3e8",
+        "hash": "3b3b8936",
+        "encoded": "or%20node.get(%22cq:panelTitle%22)",
+        "prevChunkIds": []
+      },
+      "141": {
+        "chunkId": "37b3e8",
+        "hash": "ef34e073",
+        "encoded": "or%20node.get(%22text%22)",
+        "prevChunkIds": []
+      },
+      "142": {
+        "chunkId": "37b3e8",
+        "hash": "e0dd3c1e",
+        "encoded": "or%20resource_type.split(%22/%22)%5B-1%5D",
+        "prevChunkIds": []
+      },
+      "143": {
+        "chunkId": "37b3e8",
+        "hash": "bb4e81a1",
+        "encoded": ")",
+        "prevChunkIds": []
+      },
+      "144": {
+        "chunkId": "37b3e8",
+        "hash": "c7092d69",
+        "encoded": "components.append(%7B",
+        "prevChunkIds": []
+      },
+      "145": {
+        "chunkId": "37b3e8",
+        "hash": "ed16fdbb",
+        "encoded": "%22path%22:%20current_path,",
+        "prevChunkIds": []
+      },
+      "146": {
+        "chunkId": "37b3e8",
+        "hash": "eebafd27",
+        "encoded": "%22resourceType%22:%20resource_type,",
+        "prevChunkIds": []
+      },
+      "147": {
+        "chunkId": "37b3e8",
+        "hash": "99e09227",
+        "encoded": "%22title%22:%20title",
+        "prevChunkIds": []
+      },
+      "148": {
+        "chunkId": "37b3e8",
+        "hash": "f26c1cf2",
+        "encoded": "%7D)",
+        "prevChunkIds": []
+      },
+      "150": {
+        "chunkId": "37b3e8",
+        "hash": "2ef94a42",
+        "encoded": "#%20Walk%20into%20child%20nodes",
+        "prevChunkIds": []
+      },
+      "151": {
+        "chunkId": "37b3e8",
+        "hash": "57867224",
+        "encoded": "for%20key,%20value%20in%20node.items():",
+        "prevChunkIds": []
+      },
+      "152": {
+        "chunkId": "37b3e8",
+        "hash": "e03cc757",
+        "encoded": "if%20key.startswith(%22jcr:%22)%20or%20key.startswith(%22cq:%22)%20or%20key.startswith(%22sling:%22)%20or%20key.startswith(%22nt:%22):",
+        "prevChunkIds": []
+      },
+      "153": {
+        "chunkId": "37b3e8",
+        "hash": "3bc429ec",
+        "encoded": "continue",
+        "prevChunkIds": []
+      },
+      "154": {
+        "chunkId": "37b3e8",
+        "hash": "c45c12c5",
+        "encoded": "if%20isinstance(value,%20dict)%20or%20value%20==%20%7B%7D:",
+        "prevChunkIds": []
+      },
+      "155": {
+        "chunkId": "37b3e8",
+        "hash": "87da484b",
+        "encoded": "child_path%20=%20f%22%7Bcurrent_path%7D/%7Bkey%7D%22",
+        "prevChunkIds": []
+      },
+      "156": {
+        "chunkId": "37b3e8",
+        "hash": "719d2374",
+        "encoded": "walk(child_path,%20current_depth%20+%201)",
+        "prevChunkIds": []
+      },
+      "158": {
+        "chunkId": "37b3e8",
+        "hash": "d1fef12f",
+        "encoded": "#%20Start%20from%20the%20page's%20jcr:content%20(this%20is%20where%20components%20live)",
+        "prevChunkIds": []
+      },
+      "159": {
+        "chunkId": "37b3e8",
+        "hash": "ec4cdfa1",
+        "encoded": "start_path%20=%20f%22%7Bpage_path.rstrip('/')%7D/jcr:content%22",
+        "prevChunkIds": []
+      },
+      "160": {
+        "chunkId": "37b3e8",
+        "hash": "9fe5310d",
+        "encoded": "walk(start_path,%201)",
+        "prevChunkIds": []
+      },
+      "162": {
+        "chunkId": "37b3e8",
+        "hash": "32a1cea3",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "163": {
+        "chunkId": "37b3e8",
+        "hash": "2b4ba7c4",
+        "encoded": "%22status%22:%20%22success%22,",
+        "prevChunkIds": []
+      },
+      "164": {
+        "chunkId": "37b3e8",
+        "hash": "238612f1",
+        "encoded": "%22page_path%22:%20page_path,",
+        "prevChunkIds": []
+      },
+      "165": {
+        "chunkId": "37b3e8",
+        "hash": "cab145b5",
+        "encoded": "%22component_count%22:%20len(components),",
+        "prevChunkIds": []
+      },
+      "166": {
+        "chunkId": "37b3e8",
+        "hash": "7ebd543e",
+        "encoded": "%22components%22:%20components",
+        "prevChunkIds": []
+      },
+      "167": {
+        "chunkId": "37b3e8",
+        "hash": "73b8c9b4",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      },
+      "168": {
+        "chunkId": "37b3e8",
+        "hash": "e6a3481c",
+        "encoded": "except%20Exception%20as%20e:",
+        "prevChunkIds": []
+      },
+      "169": {
+        "chunkId": "37b3e8",
+        "hash": "8cf26fcd",
+        "encoded": "logger.error(f%22Error%20discovering%20components%20for%20%7Bpage_path%7D:%20%7Bstr(e)%7D%22)",
+        "prevChunkIds": []
+      },
+      "170": {
+        "chunkId": "37b3e8",
+        "hash": "647ac59b",
+        "encoded": "return%20%7B",
+        "prevChunkIds": []
+      },
+      "171": {
+        "chunkId": "37b3e8",
+        "hash": "d14e31d5",
+        "encoded": "%22status%22:%20%22error%22,",
+        "prevChunkIds": []
+      },
+      "172": {
+        "chunkId": "37b3e8",
+        "hash": "4549f9cd",
+        "encoded": "%22message%22:%20str(e),",
+        "prevChunkIds": []
+      },
+      "173": {
+        "chunkId": "37b3e8",
+        "hash": "285c7f21",
+        "encoded": "%22path%22:%20page_path",
+        "prevChunkIds": []
+      },
+      "174": {
+        "chunkId": "37b3e8",
+        "hash": "b117a754",
+        "encoded": "%7D",
+        "prevChunkIds": []
+      }
+    },
+    "_prevLineCount": 226
+  }
+}

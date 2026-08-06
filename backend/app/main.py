@@ -34,3 +34,19 @@ def aem_status():
     """
     client = AEMClient()
     return client.is_reachable()
+@app.get("/api/aem/components")
+def get_page_components(page_path: str):
+    """
+    Discover all components on a given AEM page.
+    Example: /api/aem/components?page_path=/content/we-retail/us/en
+    """
+    client = AEMClient()
+    return client.get_components(page_path)
+@app.get("/api/aem/component/fields")
+def get_component_fields(component_path: str):
+    """
+    Get all editable fields of a selected component.
+    Example: /api/aem/component/fields?component_path=/content/we-retail/us/en/men/jcr:content/root/hero_image
+    """
+    client = AEMClient()
+    return client.get_component_fields(component_path)
