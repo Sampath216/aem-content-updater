@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from backend.app.core.config import get_settings
 from backend.app.services.aem_client import AEMClient
+from fastapi import FastAPI, Body
+from typing import Dict, Any
 
 settings = get_settings()
 
@@ -50,3 +52,18 @@ def get_component_fields(component_path: str):
     """
     client = AEMClient()
     return client.get_component_fields(component_path)
+@app.post("/api/aem/component/update")
+def update_component(
+    component_path: str,
+    properties: Dict[str, Any] = Body(...)
+):
+    """
+    Update properties of a component.
+    Example body:
+    {
+      "fileReference": "/content/dam/we-retail/en/activities/climbing/new-image.jpg",
+      "useFullWidth": "false"
+    }
+    """
+    client = AEMClient()
+    return client.update_component(component_path, properties)

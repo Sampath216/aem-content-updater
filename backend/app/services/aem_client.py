@@ -223,3 +223,51 @@ class AEMClient:
                 "message": str(e),
                 "path": component_path
             }
+    def update_component(self, component_path: str, properties: dict) -> dict:
+        """
+        Update one or more properties of a component in AEM.
+        Uses simple and reliable Sling POST (form data).
+        """
+        try:
+            if not properties:
+                return {
+                    "status": "error",
+                    "message": "No properties provided to update"
+                }
+
+            url = f"{self.base_url}{component_path}"
+
+            # Prepare form data – this is the standard way
+            data = {}
+            for key, value in properties.items():
+                # Using ./propertyName is the safest Sling convention
+                data[f"./{key}"] = value
+
+            response = self.session.post(
+                url,
+                data=data,
+                timeout=self.timeout
+            )
+
+            if response.status_code in [200, 201]:
+                return {
+                    "status": "success",
+                    "message": "Component updated successfully",
+                    "component_path": component_path,
+                    "updated_properties": list(properties.keys()),
+                    "status_code": response.status_code
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Update failed. Status code: {response.status_code}",
+                    "component_path": component_path,
+                    "response_text": response.text[:500]
+                }
+
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e),
+                "component_path": component_path
+            }
