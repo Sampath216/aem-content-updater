@@ -2,6 +2,8 @@ import requests
 from requests.auth import HTTPBasicAuth
 from backend.app.core.config import get_settings
 import logging
+from backend.app.models.audit import SessionLocal, AuditLog
+from datetime import datetime
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
@@ -223,11 +225,12 @@ class AEMClient:
                 "message": str(e),
                 "path": component_path
             }
-    def update_component(self, component_path: str, properties: dict) -> dict:
+    def update_component(self, component_path: str, properties: dict, performed_by: str = "system") -> dict:
         """
-        Update one or more properties of a component in AEM.
-        Uses simple and reliable Sling POST (form data).
+        Update one or more properties of a component in AEM
+        and write an audit log entry for every change.
         """
+        db = SessionLocal()
         try:
             if not properties:
                 return {
@@ -235,12 +238,14 @@ class AEMClient:
                     "message": "No properties provided to update"
                 }
 
+            # First, read the current values (for the "old_value" in audit)
+            current = self.get_component_fields(component_path)
+            old_fields = current.get("fields", {}) if current.get("status") == "success" else {}
+
             url = f"{self.base_url}{component_path}"
 
-            # Prepare form data – this is the standard way
             data = {}
             for key, value in properties.items():
-                # Using ./propertyName is the safest Sling convention
                 data[f"./{key}"] = value
 
             response = self.session.post(
@@ -249,10 +254,30 @@ class AEMClient:
                 timeout=self.timeout
             )
 
-            if response.status_code in [200, 201]:
+            success = response.status_code in [200, 201]
+            message = "Component updated successfully" if success else f"Update failed. Status code: {response.status_code}"
+
+            # Write one audit entry for each property that was changed
+            for key, new_value in properties.items():
+                old_value = old_fields.get(key)
+                audit_entry = AuditLog(
+                    timestamp=datetime.utcnow(),
+                    component_path=component_path,
+                    property_name=key,
+                    old_value=str(old_value) if old_value is not None else None,
+                    new_value=str(new_value),
+                    success=success,
+                    message=message,
+                    performed_by=performed_by
+                )
+                db.add(audit_entry)
+
+            db.commit()
+
+            if success:
                 return {
                     "status": "success",
-                    "message": "Component updated successfully",
+                    "message": message,
                     "component_path": component_path,
                     "updated_properties": list(properties.keys()),
                     "status_code": response.status_code
@@ -260,14 +285,17 @@ class AEMClient:
             else:
                 return {
                     "status": "error",
-                    "message": f"Update failed. Status code: {response.status_code}",
+                    "message": message,
                     "component_path": component_path,
                     "response_text": response.text[:500]
                 }
 
         except Exception as e:
+            db.rollback()
             return {
                 "status": "error",
                 "message": str(e),
                 "component_path": component_path
             }
+        finally:
+            db.close()
