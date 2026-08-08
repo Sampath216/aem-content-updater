@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AEM Content Updater</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>AEM Content Updater</h1>
+        <p class="subtitle">Enterprise Component Editor</p>
+      </header>
+
+      <!-- LOGIN SECTION -->
+      <section id="login-section" class="card">
+        <h2>Login</h2>
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="username" value="admin" />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="password" value="Admin@123" />
+        </div>
+        <button onclick="login()" class="btn primary">Login</button>
+        <p id="login-message" class="message"></p>
+      </section>
+
+      <!-- MAIN APP -->
+      <section id="app-section" class="hidden">
+        <div class="user-info">
+          Logged in as: <strong id="logged-user"></strong>
+          <button onclick="logout()" class="btn small">Logout</button>
+        </div>
+
+        <!-- PAGE PATH -->
+        <div class="card">
+          <h2>1. Enter Page Path</h2>
+          <div
+            class="form-group"
+            style="display: flex; gap: 10px; align-items: center"
+          >
+            <input
+              type="text"
+              id="page-path"
+              placeholder="/content/we-retail/us/en/men"
+              style="flex: 1"
+            />
+            <button onclick="loadComponents()" class="btn primary">
+              Load Components
+            </button>
+          </div>
+          <p id="page-message" class="message"></p>
+        </div>
+
+        <!-- SIDE-BY-SIDE WORKSPACE -->
+        <div class="main-workspace">
+          <!-- LEFT: Components -->
+          <div class="left-panel">
+            <div class="card" id="components-card" style="display: none">
+              <h2>2. Select a Component</h2>
+              
+              <div class="form-group" style="margin-bottom: 14px">
+                <label for="component-filter">Filter by Component</label>
+                <select
+                  id="component-filter"
+                  onchange="filterComponents()"
+                  style="
+                    width: 100%;
+                    padding: 9px 12px;
+                    border: 1px solid #d0d5dd;
+                    border-radius: 6px;
+                    font-size: 14px;
+                  "
+                >
+                  <option value="all">All Components</option>
+                </select>
+              </div>
+
+              <div id="components-list"></div>
+            </div>
+          </div>
+
+          <!-- RIGHT: Fields -->
+          <div class="right-panel">
+            <div class="card" id="fields-card" style="display: none">
+              <h2>3. Edit Fields</h2>
+              <span id="selected-component-path"></span>
+              <div id="fields-form"></div>
+              <button
+                onclick="saveChanges()"
+                class="btn primary"
+                style="margin-top: 18px"
+              >
+                Save Changes
+              </button>
+              <p id="save-message" class="message"></p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

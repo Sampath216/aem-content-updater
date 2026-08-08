@@ -1,3 +1,4 @@
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import Dict, Any
@@ -159,3 +160,11 @@ def get_audit_logs(
         return {"status": "success", "count": len(result), "logs": result}
     finally:
         db.close()
+# Allow the frontend to talk to the API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # In production we will restrict this
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)        
