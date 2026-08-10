@@ -100,6 +100,24 @@
             </div>
           </div>
         </div>
+                    <!-- EXCEL BULK UPDATE SECTION -->
+            <div class="card" style="margin-top: 30px;">
+                <h2>4. Bulk Update from Excel</h2>
+                <p style="font-size:13px; color:#666; margin-bottom:15px;">
+                    Upload the Excel template to update Page SEO properties and Components in bulk.
+                </p>
+
+                <div class="form-group">
+                    <input type="file" id="excel-file" accept=".xlsx,.xls" style="padding:8px;">
+                </div>
+
+                <button onclick="previewExcel()" class="btn primary">Preview Changes</button>
+                <button onclick="applyExcel()" class="btn primary" id="apply-btn" style="display:none; margin-left:10px; background:#2e7d32;">Apply Changes</button>
+
+                <p id="excel-message" class="message"></p>
+
+                <div id="excel-preview" style="display:none; margin-top:20px;"></div>
+            </div>
       </section>
     </div>
 

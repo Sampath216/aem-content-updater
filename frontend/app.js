@@ -209,19 +209,42 @@ async function selectComponent(componentPath, clickedElement) {
       throw new Error(data.detail || data.message || "Failed to load fields");
     }
 
-    currentFields = data.fields;
+        currentFields = data.fields;
     formEl.innerHTML = "";
 
-    for (const [key, value] of Object.entries(data.fields)) {
+    // Preferred display order for better CA experience
+    const preferredOrder = [
+      // Title / Heading
+      "jcr:title", "title", "heading", "pageTitle", "navTitle", "subtitle",
+      // Description
+      "jcr:description", "description", "text",
+      // Button related (keep together)
+      "buttonLabel", "buttonText", "buttonLinkTo", "linkTo", "linkURL", "link",
+      // Image
+      "fileReference", "image", "alt", "altText",
+      // Others
+      "useFullWidth", "fullWidth", "type", "cq:panelTitle"
+    ];
+
+    // Sort fields: preferred order first, then the rest
+    const sortedKeys = Object.keys(data.fields).sort((a, b) => {
+      const aIdx = preferredOrder.findIndex(p => p.toLowerCase() === a.toLowerCase());
+      const bIdx = preferredOrder.findIndex(p => p.toLowerCase() === b.toLowerCase());
+
+      if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+      if (aIdx !== -1) return -1;
+      if (bIdx !== -1) return 1;
+      return a.localeCompare(b);
+    });
+
+    for (const key of sortedKeys) {
+      const value = data.fields[key];
       const row = document.createElement("div");
       row.className = "field-row";
 
-      // Detect boolean values
       const isBoolean =
-        value === true ||
-        value === false ||
-        value === "true" ||
-        value === "false" ||
+        value === true || value === false ||
+        value === "true" || value === "false" ||
         key.toLowerCase().includes("fullwidth") ||
         key.toLowerCase().includes("enabled") ||
         key.toLowerCase().includes("hide") ||
@@ -230,23 +253,31 @@ async function selectComponent(componentPath, clickedElement) {
       let inputHtml = "";
 
       if (isBoolean) {
-        // Create a dropdown for true/false
-        const current = value === true || value === "true" ? "true" : "false";
+        const current = (value === true || value === "true") ? "true" : "false";
         inputHtml = `
-                    <select id="field-${key}" style="flex:1; padding:9px 12px; border:1px solid #d0d5dd; border-radius:6px; font-size:14px;">
-                        <option value="true" ${current === "true" ? "selected" : ""}>true</option>
-                        <option value="false" ${current === "false" ? "selected" : ""}>false</option>
-                    </select>
-                `;
+          <select id="field-${key}" style="flex:1; padding:9px 12px; border:1px solid #d0d5dd; border-radius:6px; font-size:14px;">
+            <option value="true" ${current === "true" ? "selected" : ""}>true</option>
+            <option value="false" ${current === "false" ? "selected" : ""}>false</option>
+          </select>
+        `;
       } else {
-        // Normal text input
-        inputHtml = `<input type="text" id="field-${key}" value="${value !== null && value !== undefined ? value : ""}">`;
+        inputHtml = `<input type="text" id="field-${key}" value="${value !== null && value !== undefined ? value : ''}">`;
       }
 
+      // Friendlier labels for Content Authors
+      let displayLabel = key;
+      if (key === "buttonLinkTo") displayLabel = "Button Link To";
+      if (key === "buttonLabel") displayLabel = "Button Label";
+      if (key === "linkTo") displayLabel = "Link To";
+      if (key === "fileReference") displayLabel = "Image / File Reference";
+      if (key === "useFullWidth") displayLabel = "Use Full Width";
+      if (key === "jcr:title") displayLabel = "Title (jcr:title)";
+      if (key === "jcr:description") displayLabel = "Description (jcr:description)";
+
       row.innerHTML = `
-                <label>${key}</label>
-                ${inputHtml}
-            `;
+        <label title="${key}">${displayLabel}</label>
+        ${inputHtml}
+      `;
       formEl.appendChild(row);
     }
 
@@ -328,4 +359,203 @@ function filterComponents() {
       item.style.display = "none";
     }
   });
+}
+// ========== EXCEL BULK UPDATE ==========
+let lastExcelFile = null;
+
+async function previewExcel() {
+    const fileInput = document.getElementById("excel-file");
+    const messageEl = document.getElementById("excel-message");
+    const previewEl = document.getElementById("excel-preview");
+    const applyBtn = document.getElementById("apply-btn");
+
+    if (!fileInput.files || fileInput.files.length === 0) {
+        messageEl.textContent = "Please select an Excel file first";
+        messageEl.className = "message error";
+        return;
+    }
+
+    const file = fileInput.files[0];
+    lastExcelFile = file;
+
+    messageEl.textContent = "Generating preview...";
+    messageEl.className = "message";
+    previewEl.style.display = "none";
+    applyBtn.style.display = "none";
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+        const response = await fetch(`${API_BASE}/api/excel/preview`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${accessToken}`
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || data.status !== "success") {
+            throw new Error(data.message || data.detail || "Preview failed");
+        }
+
+        messageEl.textContent = `Preview ready – ${data.summary.total_seo_rows} SEO rows, ${data.summary.total_component_rows} component rows`;
+        messageEl.className = "message success";
+
+        // Build preview HTML
+        let html = `<h3 style="margin-bottom:12px;">Preview of Changes</h3>`;
+
+        if (data.seo_updates && data.seo_updates.length > 0) {
+            html += `<h4>SEO / Page Properties (${data.seo_updates.length})</h4>`;
+            html += `<div style="max-height:260px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:10px; margin-bottom:15px;">`;
+            data.seo_updates.forEach(item => {
+                html += `<div style="margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #f0f0f0;">
+                    <strong>${item.page_path}</strong><br>`;
+                for (const [k, v] of Object.entries(item.properties)) {
+                    html += `<span style="font-size:12px; color:#555;">${k}: <b>${v}</b></span><br>`;
+                }
+                html += `</div>`;
+            });
+            html += `</div>`;
+        }
+
+        if (data.component_updates && data.component_updates.length > 0) {
+            html += `<h4>Component Updates (${data.component_updates.length})</h4>`;
+            html += `<div style="max-height:300px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:10px;">`;
+            data.component_updates.forEach(item => {
+                html += `<div style="margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #f0f0f0;">
+                    <strong>${item.component_name}</strong> (Instance ${item.instance}) on <code>${item.page_path}</code><br>`;
+                for (const [k, v] of Object.entries(item.properties)) {
+                    html += `<span style="font-size:12px; color:#555;">${k}: <b>${v}</b></span><br>`;
+                }
+                html += `</div>`;
+            });
+            html += `</div>`;
+        }
+
+        previewEl.innerHTML = html;
+        previewEl.style.display = "block";
+        applyBtn.style.display = "inline-block";
+
+    } catch (error) {
+        messageEl.textContent = error.message;
+        messageEl.className = "message error";
+    }
+}
+
+async function applyExcel() {
+    if (!lastExcelFile) {
+        alert("Please preview the Excel first");
+        return;
+    }
+
+    if (!confirm("Are you sure you want to apply all these changes to AEM?\n\nThis action cannot be undone easily.")) {
+        return;
+    }
+
+    const messageEl = document.getElementById("excel-message");
+    const previewEl = document.getElementById("excel-preview");
+
+    messageEl.textContent = "Applying changes... Please wait...";
+    messageEl.className = "message";
+
+    const formData = new FormData();
+    formData.append("file", lastExcelFile);
+
+    try {
+        const response = await fetch(`${API_BASE}/api/excel/apply`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${accessToken}`
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        // Safer handling
+        if (!response.ok) {
+            throw new Error(data.detail || data.message || "Apply failed with server error");
+        }
+
+        if (data.status !== "success") {
+            throw new Error(data.message || "Apply failed");
+        }
+
+        const res = data.results || {};
+        const successCount = res.success_count || 0;
+        const errorCount = res.error_count || 0;
+        const skippedCount = res.skipped_count || 0;
+
+        messageEl.textContent = `Completed – Success: ${successCount}, Errors: ${errorCount}, Skipped: ${skippedCount}`;
+        messageEl.className = errorCount > 0 ? "message error" : "message success";
+
+        // Build detailed report
+        let html = `<h3 style="margin-bottom:12px;">Detailed Results</h3>`;
+        html += `<p><strong>Success:</strong> ${successCount} &nbsp;|&nbsp; <strong>Errors:</strong> ${errorCount} &nbsp;|&nbsp; <strong>Skipped:</strong> ${skippedCount}</p>`;
+
+        // SEO Results
+        if (res.seo_results && res.seo_results.length > 0) {
+            html += `<h4 style="margin-top:18px;">SEO / Page Properties</h4>`;
+            html += `<div style="max-height:300px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:12px;">`;
+
+            res.seo_results.forEach(r => {
+                const hasError = r.errors && r.errors.length > 0;
+                const icon = hasError ? "❌" : (r.updated_fields && r.updated_fields.length > 0 ? "✅" : "⏭️");
+
+                html += `<div style="margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid #f0f0f0;">
+                    <strong>${icon} ${r.page_path}</strong><br>`;
+
+                if (r.updated_fields && r.updated_fields.length > 0) {
+                    html += `<span style="color:#2e7d32; font-size:13px;">Updated: ${r.updated_fields.join(", ")}</span><br>`;
+                }
+                if (r.skipped_fields && r.skipped_fields.length > 0) {
+                    html += `<span style="color:#f57c00; font-size:13px;">Skipped: ${r.skipped_fields.join(", ")}</span><br>`;
+                }
+                if (r.errors && r.errors.length > 0) {
+                    html += `<span style="color:#c62828; font-size:13px;">Errors: ${r.errors.join(" | ")}</span><br>`;
+                }
+                html += `</div>`;
+            });
+            html += `</div>`;
+        }
+
+        // Component Results
+        if (res.component_results && res.component_results.length > 0) {
+            html += `<h4 style="margin-top:18px;">Component Updates</h4>`;
+            html += `<div style="max-height:300px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:12px;">`;
+
+            res.component_results.forEach(r => {
+                const hasError = r.errors && r.errors.length > 0;
+                const icon = hasError ? "❌" : (r.updated_fields && r.updated_fields.length > 0 ? "✅" : "⏭️");
+
+                html += `<div style="margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid #f0f0f0;">
+                    <strong>${icon} ${r.component_name} (Instance ${r.instance})</strong> on <code>${r.page_path}</code><br>`;
+
+                if (r.component_path) {
+                    html += `<span style="font-size:12px; color:#666;">Path: ${r.component_path}</span><br>`;
+                }
+                if (r.updated_fields && r.updated_fields.length > 0) {
+                    html += `<span style="color:#2e7d32; font-size:13px;">Updated: ${r.updated_fields.join(", ")}</span><br>`;
+                }
+                if (r.skipped_fields && r.skipped_fields.length > 0) {
+                    html += `<span style="color:#f57c00; font-size:13px;">Skipped: ${r.skipped_fields.join(", ")}</span><br>`;
+                }
+                if (r.errors && r.errors.length > 0) {
+                    html += `<span style="color:#c62828; font-size:13px;">Errors: ${r.errors.join(" | ")}</span><br>`;
+                }
+                html += `</div>`;
+            });
+            html += `</div>`;
+        }
+
+        previewEl.innerHTML = html;
+
+    } catch (error) {
+        messageEl.textContent = error.message;
+        messageEl.className = "message error";
+        console.error("Apply error:", error);
+    }
 }
