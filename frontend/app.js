@@ -559,3 +559,161 @@ async function applyExcel() {
         console.error("Apply error:", error);
     }
 }
+
+// ========== COMPONENT CATALOG + TEMPLATE GENERATOR ==========
+let catalogData = null;
+let selectedCatalogItems = {};   // key = resourceType|version → {fields: Set}
+
+async function loadCatalog() {
+    const messageEl = document.getElementById("catalog-message");
+    const listEl = document.getElementById("catalog-list");
+    const genBtn = document.getElementById("generate-template-btn");
+
+    messageEl.textContent = "Loading catalog...";
+    messageEl.className = "message";
+    listEl.innerHTML = "";
+    genBtn.style.display = "none";
+    selectedCatalogItems = {};
+
+    try {
+        const response = await fetch(`${API_BASE}/api/catalog/list`, {
+            headers: { "Authorization": `Bearer ${accessToken}` }
+        });
+        const data = await response.json();
+
+        if (!response.ok || data.status !== "success") {
+            throw new Error(data.message || "Failed to load catalog");
+        }
+
+        catalogData = data.components;
+        messageEl.textContent = `Catalog loaded – ${data.total_components} components`;
+        messageEl.className = "message success";
+
+        if (data.total_components === 0) {
+            listEl.innerHTML = "<p>No components in catalog yet. Load a page first so components are stored.</p>";
+            return;
+        }
+
+        let html = "";
+        for (const [resourceType, info] of Object.entries(catalogData)) {
+            const shortName = resourceType.split("/").pop();
+            html += `<div style="border:1px solid #e0e0e0; border-radius:8px; padding:12px; margin-bottom:12px;">
+                <strong style="font-size:15px;">${shortName}</strong>
+                <div style="font-size:12px; color:#666; margin-bottom:8px;">${resourceType}</div>`;
+
+            info.versions.forEach(v => {
+                const key = `${resourceType}|${v.version}`;
+                html += `<div style="margin-left:10px; margin-bottom:8px; padding:8px; background:#f8f9fa; border-radius:6px;">
+                    <label style="font-weight:600;">
+                        <input type="checkbox" onchange="toggleComponentSelection('${key}', this.checked)" style="margin-right:6px;">
+                        ${v.version} (${v.fields.length} fields)
+                    </label>
+                    <button onclick="toggleFieldsView('${key}')" style="margin-left:10px; font-size:12px; padding:2px 8px;">Show / Hide Fields</button>
+                    <div id="fields-${key.replace('|', '-')}" style="display:none; margin-top:8px; font-size:13px;">`;
+
+                v.fields.forEach(f => {
+                    html += `<label style="display:inline-block; margin:3px 8px 3px 0;">
+                        <input type="checkbox" class="field-check" data-key="${key}" value="${f}" checked style="margin-right:3px;">
+                        ${f}
+                    </label>`;
+                });
+
+                html += `</div></div>`;
+            });
+            html += `</div>`;
+        }
+
+        listEl.innerHTML = html;
+        genBtn.style.display = "inline-block";
+
+    } catch (error) {
+        messageEl.textContent = error.message;
+        messageEl.className = "message error";
+    }
+}
+
+function toggleFieldsView(key) {
+    const id = "fields-" + key.replace("|", "-");
+    const el = document.getElementById(id);
+    if (el) {
+        el.style.display = el.style.display === "none" ? "block" : "none";
+    }
+}
+
+function toggleComponentSelection(key, checked) {
+    if (checked) {
+        selectedCatalogItems[key] = true;
+    } else {
+        delete selectedCatalogItems[key];
+    }
+}
+async function generateTemplateFromCatalog() {
+    const messageEl = document.getElementById("catalog-message");
+
+    const selections = [];
+
+    for (const key of Object.keys(selectedCatalogItems)) {
+        const [resourceType, version] = key.split("|");
+        const versionInfo = catalogData[resourceType].versions.find(v => v.version === version);
+        if (!versionInfo) continue;
+
+        // Collect checked fields
+        const fieldChecks = document.querySelectorAll(`.field-check[data-key="${key}"]`);
+        const selectedFields = [];
+        fieldChecks.forEach(cb => {
+            if (cb.checked) selectedFields.push(cb.value);
+        });
+
+        if (selectedFields.length === 0) continue;
+
+        selections.push({
+            resourceType: resourceType,
+            version: version,
+            fields: selectedFields,
+            label: resourceType.split("/").pop()
+        });
+    }
+
+    if (selections.length === 0) {
+        messageEl.textContent = "Please select at least one component and some fields";
+        messageEl.className = "message error";
+        return;
+    }
+
+    messageEl.textContent = "Generating Excel template...";
+    messageEl.className = "message";
+
+    try {
+        const response = await fetch(`${API_BASE}/api/catalog/generate-template`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${accessToken}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ selections })
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.message || err.detail || "Generation failed");
+        }
+
+        // Download the file
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "AEM_Template_From_Catalog.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+
+        messageEl.textContent = "Excel template downloaded successfully!";
+        messageEl.className = "message success";
+
+    } catch (error) {
+        messageEl.textContent = error.message;
+        messageEl.className = "message error";
+    }
+}

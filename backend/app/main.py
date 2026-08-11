@@ -18,6 +18,7 @@ from backend.app.core.auth import (
 )
 from fastapi import UploadFile, File
 from backend.app.services.excel_processor import ExcelProcessor
+from backend.app.services.component_catalog import ComponentCatalog
 
 settings = get_settings()
 
@@ -468,3 +469,137 @@ async def apply_excel_updates(
         "message": f"Completed – Success: {results['success_count']}, Errors: {results['error_count']}, Skipped: {results['skipped_count']}",
         "results": results
     }
+@app.post("/api/catalog/update-from-page")
+def update_catalog_from_page(
+    page_path: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Scan a page and update the Component Catalog
+    (stores components + exact dialog fields + versions).
+    """
+    catalog = ComponentCatalog()
+    return catalog.update_from_page(page_path)
+
+
+@app.get("/api/catalog/list")
+def list_catalog(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Return the full Component Catalog.
+    """
+    catalog = ComponentCatalog()
+    data = catalog.get_all()
+    return {
+        "status": "success",
+        "total_components": len(data.get("components", {})),
+        "components": data.get("components", {})
+    }
+    
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
+from openpyxl.utils import get_column_letter
+from io import BytesIO
+from pydantic import BaseModel
+from typing import List, Optional
+
+class FieldSelection(BaseModel):
+    resourceType: str
+    version: str
+    fields: List[str]          # exact field names to include
+    label: Optional[str] = None
+
+class TemplateFromCatalogRequest(BaseModel):
+    selections: List[FieldSelection]
+
+@app.post("/api/catalog/generate-template")
+def generate_template_from_catalog(
+    request: TemplateFromCatalogRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate Excel template using exact dialog field names
+    from the Component Catalog. Header row is protected.
+    """
+    wb = Workbook()
+
+    # Styles
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+
+    # Instructions sheet
+    ws_inst = wb.active
+    ws_inst.title = "Instructions"
+    ws_inst["A1"] = "AEM Content Updater – Generated Template"
+    ws_inst["A1"].font = Font(bold=True, size=16, color="1F4E79")
+    ws_inst["A3"] = "Important Rules"
+    ws_inst["A3"].font = Font(bold=True, size=12)
+    ws_inst["A4"] = "1. Do NOT change the header row (field names). They are locked."
+    ws_inst["A5"] = "2. Only fill data rows. Leave a cell empty if you do not want to change that field."
+    ws_inst["A6"] = "3. Page Path must start with /content/"
+    ws_inst["A7"] = "4. Instance column: use 1, 2, 3... for multiple instances of the same component on a page."
+    ws_inst["A8"] = "5. Upload this file in the tool and always review the Preview before applying."
+    ws_inst.column_dimensions["A"].width = 90
+
+    # Create one sheet per selected component
+    for sel in request.selections:
+        # Sheet name max 31 characters
+        sheet_name = (sel.label or sel.resourceType.split("/")[-1])[:31]
+        ws = wb.create_sheet(title=sheet_name)
+
+        # Headers: Page Path | Instance | + selected fields
+        headers = ["Page Path", "Instance"] + sel.fields
+
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+            cell.border = thin_border
+            # Protect header cell
+            cell.protection = Protection(locked=True)
+
+        # Add a few empty data rows
+        for row in range(2, 8):
+            for col in range(1, len(headers) + 1):
+                cell = ws.cell(row=row, column=col, value="")
+                cell.border = thin_border
+                cell.protection = Protection(locked=False)
+
+        # Set column widths
+        ws.column_dimensions["A"].width = 40
+        ws.column_dimensions["B"].width = 12
+        for col in range(3, len(headers) + 1):
+            ws.column_dimensions[get_column_letter(col)].width = 22
+
+        # Protect the sheet (header locked, data editable)
+        ws.protection.sheet = True
+        ws.protection.password = "aem"
+
+    # Remove default empty sheet if it exists
+    if "Sheet" in wb.sheetnames:
+        del wb["Sheet"]
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=AEM_Template_From_Catalog.xlsx"}
+    )
+
+@app.get("/api/aem/component/diagnose")
+def diagnose_component(
+    component_path: str,
+    current_user: User = Depends(get_current_user)
+):
+    client = AEMClient()
+    return client.diagnose_component_dialog(component_path)

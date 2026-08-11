@@ -1,0 +1,174 @@
+{
+  "components": {
+    "weretail/components/structure/page": {
+      "versions": [
+        {
+          "version": "v1",
+          "fields": [
+            "cq:canonicalUrl",
+            "cq:lastModified",
+            "cq:lastModifiedBy",
+            "jcr:description",
+            "jcr:title",
+            "pageTitle",
+            "socialMedia",
+            "socialMedia@TypeHint",
+            "variantPath"
+          ],
+          "first_seen": "2026-08-10T08:09:47.457892",
+          "last_seen": "2026-08-10T08:09:47.457914",
+          "seen_on_pages": [
+            "/content/we-retail/ca/en/men"
+          ]
+        }
+      ]
+    },
+    "wcm/foundation/components/responsivegrid": {
+      "versions": [
+        {
+          "version": "v1",
+          "fields": [],
+          "first_seen": "2026-08-10T08:09:47.692119",
+          "last_seen": "2026-08-10T08:09:48.050524",
+          "seen_on_pages": [
+            "/content/we-retail/ca/en/men"
+          ]
+        }
+      ]
+    },
+    "weretail/components/content/heroimage": {
+      "versions": [
+        {
+          "version": "v1",
+          "fields": [
+            "buttonLabel",
+            "buttonLinkTo",
+            "fileReference",
+            "heading",
+            "title",
+            "useFullWidth"
+          ],
+          "first_seen": "2026-08-10T08:09:47.782057",
+          "last_seen": "2026-08-10T08:09:47.782065",
+          "seen_on_pages": [
+            "/content/we-retail/ca/en/men"
+          ]
+        }
+      ]
+    },
+    "weretail/components/content/title": {
+      "versions": [
+        {
+          "version": "v1",
+          "fields": [
+            "jcr:title",
+            "type",
+            "linkURL"
+          ],
+          "first_seen": "2026-08-10T08:09:48.461256",
+          "last_seen": "2026-08-10T08:09:49.891209",
+          "seen_on_pages": [
+            "/content/we-retail/ca/en/men"
+          ]
+        }
+      ]
+    },
+    "weretail/components/content/productgrid": {
+      "versions": [
+        {
+          "version": "v1",
+          "fields": [
+            "displayAs",
+            "feedEnabled",
+            "itemType",
+            "limit",
+            "listFrom",
+            "orderBy",
+            "pageMax",
+            "tagsMatch"
+          ],
+          "first_seen": "2026-08-10T08:09:48.770971",
+          "last_seen": "2026-08-10T08:09:48.770991",
+          "seen_on_pages": [
+            "/content/we-retail/ca/en/men"
+          ]
+        }
+      ]
+    },
+    "weretail/components/content/button": {
+      "versions": [
+        {
+          "version": "v1",
+          "fields": [
+            "cssClass",
+            "label",
+            "linkTo"
+          ],
+          "first_seen": "2026-08-10T08:09:48.830471",
+          "last_seen": "2026-08-10T08:09:48.830586",
+          "seen_on_pages": [
+            "/content/we-retail/ca/en/men"
+          ]
+        }
+      ]
+    },
+    "weretail/components/content/teaser": {
+      "versions": [
+        {
+          "version": "v1",
+          "fields": [
+            "actions",
+            "actionsEnabled",
+            "copyright",
+            "descriptionFromPage",
+            "euro",
+            "file",
+            "fileReference",
+            "jcr:title",
+            "link",
+            "linkURL",
+            "registered",
+            "text",
+            "titleFromPage",
+            "trademark"
+          ],
+          "first_seen": "2026-08-10T08:09:49.231146",
+          "last_seen": "2026-08-10T08:09:49.590276",
+          "seen_on_pages": [
+            "/content/we-retail/ca/en/men"
+          ]
+        }
+      ]
+    },
+    "weretail/components/content/list": {
+      "versions": [
+        {
+          "version": "v1",
+          "fields": [
+            "childDepth",
+            "itemType",
+            "linkItems",
+            "listFrom",
+            "maxItems",
+            "orderBy",
+            "pages",
+            "parentPage",
+            "query",
+            "searchIn",
+            "showDescription",
+            "showModificationDate",
+            "sortOrder",
+            "tags",
+            "tagsMatch",
+            "tagsSearchRoot"
+          ],
+          "first_seen": "2026-08-10T08:09:50.069281",
+          "last_seen": "2026-08-10T08:09:50.069288",
+          "seen_on_pages": [
+            "/content/we-retail/ca/en/men"
+          ]
+        }
+      ]
+    }
+  }
+}
