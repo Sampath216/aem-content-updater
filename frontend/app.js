@@ -171,15 +171,16 @@ async function loadComponents() {
 }
 
 // ========== SELECT COMPONENT + LOAD FIELDS ==========
+// Holds multifield runtime state: { fieldKey: [ "val1", "val2", ... ] }
+let multifieldState = {};
+
 async function selectComponent(componentPath, clickedElement) {
   selectedComponentPath = componentPath;
+  multifieldState = {};
 
-  // Remove previous selection
   document.querySelectorAll(".component-item").forEach((el) => {
     el.classList.remove("selected");
   });
-
-  // Highlight the clicked one
   if (clickedElement) {
     clickedElement.classList.add("selected");
   }
@@ -196,94 +197,444 @@ async function selectComponent(componentPath, clickedElement) {
   try {
     const response = await fetch(
       `${API_BASE}/api/aem/component/fields?component_path=${encodeURIComponent(componentPath)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      },
+      { headers: { Authorization: `Bearer ${accessToken}` } }
     );
-
     const data = await response.json();
-
     if (!response.ok || data.status !== "success") {
       throw new Error(data.detail || data.message || "Failed to load fields");
     }
 
-        currentFields = data.fields;
+    currentFields = data.fields || {};
+    const fieldMeta = data.field_meta || {};
+    const tabs = data.tabs || [];
+    const topMultifields = data.multifields || [];
     formEl.innerHTML = "";
 
-    // Preferred display order for better CA experience
-    const preferredOrder = [
-      // Title / Heading
-      "jcr:title", "title", "heading", "pageTitle", "navTitle", "subtitle",
-      // Description
-      "jcr:description", "description", "text",
-      // Button related (keep together)
-      "buttonLabel", "buttonText", "buttonLinkTo", "linkTo", "linkURL", "link",
-      // Image
-      "fileReference", "image", "alt", "altText",
-      // Others
-      "useFullWidth", "fullWidth", "type", "cq:panelTitle"
-    ];
+    // ---------- helpers ----------
+    function isCheckboxField(key, meta, value) {
+      const t = (meta.type || meta.resourceType || "").toLowerCase();
+      if (t.includes("checkbox") || t.includes("switch")) return true;
+      if (value === true || value === false) return true;
+      if (value === "true" || value === "false") {
+        const k = key.toLowerCase();
+        if (k.includes("enable") || k.includes("hide") || k.includes("show") ||
+            k.includes("fullwidth") || k.includes("frompage") || k.includes("redirect") ||
+            k.includes("root") || k.includes("inherit")) return true;
+      }
+      return false;
+    }
 
-    // Sort fields: preferred order first, then the rest
-    const sortedKeys = Object.keys(data.fields).sort((a, b) => {
-      const aIdx = preferredOrder.findIndex(p => p.toLowerCase() === a.toLowerCase());
-      const bIdx = preferredOrder.findIndex(p => p.toLowerCase() === b.toLowerCase());
+    function isSelectField(meta) {
+      const t = (meta.type || meta.resourceType || "").toLowerCase();
+      return t.includes("select") || t.includes("dropdown");
+    }
 
-      if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
-      if (aIdx !== -1) return -1;
-      if (bIdx !== -1) return 1;
-      return a.localeCompare(b);
-    });
+    function escapeHtml(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
 
-    for (const key of sortedKeys) {
-      const value = data.fields[key];
+    /** Infer show/hide group from dialog path (setChildren → children, setStatic → static, ...) */
+    function inferShowHideGroup(path) {
+      if (!path) return null;
+      const m = String(path).match(/\/set([A-Za-z]+)\//);
+      if (!m) return null;
+      const name = m[1]; // Children, Static, Search, Tags
+      return name.charAt(0).toLowerCase() + name.slice(1); // children, static, ...
+    }
+
+    function renderFieldControl(container, key, value, meta) {
+      meta = meta || {};
+      const label = meta.label || key;
       const row = document.createElement("div");
       row.className = "field-row";
-
-      const isBoolean =
-        value === true || value === false ||
-        value === "true" || value === "false" ||
-        key.toLowerCase().includes("fullwidth") ||
-        key.toLowerCase().includes("enabled") ||
-        key.toLowerCase().includes("hide") ||
-        key.toLowerCase().includes("show");
-
-      let inputHtml = "";
-
-      if (isBoolean) {
-        const current = (value === true || value === "true") ? "true" : "false";
-        inputHtml = `
-          <select id="field-${key}" style="flex:1; padding:9px 12px; border:1px solid #d0d5dd; border-radius:6px; font-size:14px;">
-            <option value="true" ${current === "true" ? "selected" : ""}>true</option>
-            <option value="false" ${current === "false" ? "selected" : ""}>false</option>
-          </select>
-        `;
-      } else {
-        inputHtml = `<input type="text" id="field-${key}" value="${value !== null && value !== undefined ? value : ''}">`;
+      row.style.cssText = "display:flex; align-items:flex-start; gap:12px; margin-bottom:14px; min-height:36px;";
+      row.dataset.fieldKey = key;
+      if (meta.path) {
+        const grp = inferShowHideGroup(meta.path);
+        if (grp) row.dataset.showhideGroup = grp;
+      }
+      // also check properties for showhidetargetvalue
+      if (meta.properties && meta.properties.showhidetargetvalue) {
+        row.dataset.showhideGroup = String(meta.properties.showhidetargetvalue);
       }
 
-      // Friendlier labels for Content Authors
-      let displayLabel = key;
-      if (key === "buttonLinkTo") displayLabel = "Button Link To";
-      if (key === "buttonLabel") displayLabel = "Button Label";
-      if (key === "linkTo") displayLabel = "Link To";
-      if (key === "fileReference") displayLabel = "Image / File Reference";
-      if (key === "useFullWidth") displayLabel = "Use Full Width";
-      if (key === "jcr:title") displayLabel = "Title (jcr:title)";
-      if (key === "jcr:description") displayLabel = "Description (jcr:description)";
+      const labelEl = document.createElement("label");
+      labelEl.style.cssText = "min-width:180px; max-width:180px; font-size:13px; color:#333; padding-top:8px; line-height:1.3;";
+      labelEl.title = key;
+      labelEl.textContent = label;
 
-      row.innerHTML = `
-        <label title="${key}">${displayLabel}</label>
-        ${inputHtml}
-      `;
-      formEl.appendChild(row);
+      const controlWrap = document.createElement("div");
+      controlWrap.style.cssText = "flex:1; display:flex; align-items:center; min-height:36px;";
+
+      if (isCheckboxField(key, meta, value)) {
+        // AEM-style: checkbox aligned in the control column (same column as text inputs)
+        const checked = value === true || value === "true" || value === "on";
+        controlWrap.innerHTML = `
+          <input type="checkbox" id="field-${escapeHtml(key)}" ${checked ? "checked" : ""}
+            style="width:18px; height:18px; cursor:pointer; margin:0;">`;
+        row.appendChild(labelEl);
+        row.appendChild(controlWrap);
+      } else if ((meta.options && meta.options.length) || isSelectField(meta)) {
+        // Real dropdown from dialog options (Match, Order By, listFrom, etc.)
+        const sel = document.createElement("select");
+        sel.id = "field-" + key;
+        sel.style.cssText = "flex:1; width:100%; padding:9px 12px; border:1px solid #d0d5dd; border-radius:6px; font-size:14px; box-sizing:border-box; background:#fff;";
+        const current = value != null ? String(value) : "";
+        const opts = meta.options && meta.options.length ? meta.options : [];
+        // empty option
+        const empty = document.createElement("option");
+        empty.value = "";
+        empty.textContent = meta.emptyText || "— Select —";
+        sel.appendChild(empty);
+        opts.forEach(o => {
+          const opt = document.createElement("option");
+          opt.value = o.value != null ? String(o.value) : "";
+          opt.textContent = o.text != null ? String(o.text) : opt.value;
+          if (opt.value === current) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        // if current not in options, still show it
+        if (current && !opts.some(o => String(o.value) === current)) {
+          const opt = document.createElement("option");
+          opt.value = current;
+          opt.textContent = current;
+          opt.selected = true;
+          sel.appendChild(opt);
+        }
+        // showhide controller?
+        const gclass = (meta.properties && (meta.properties["granite:class"] || meta.properties.granite_class || "")) || "";
+        if (String(gclass).toLowerCase().includes("showhide")) {
+          sel.dataset.showhideController = "1";
+          sel.dataset.currentValue = current;
+          row.dataset.isShowhideController = "1";
+        }
+        controlWrap.appendChild(sel);
+        row.appendChild(labelEl);
+        row.appendChild(controlWrap);
+      } else if ((meta.type || "").toLowerCase().includes("radio")) {
+        const current = value != null ? String(value) : "";
+        const opts = meta.options || [];
+        const group = document.createElement("div");
+        group.style.cssText = "display:flex; flex-direction:column; gap:6px;";
+        opts.forEach((o, i) => {
+          const id = `field-${key}-${i}`;
+          const lab = document.createElement("label");
+          lab.style.cssText = "display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;";
+          lab.innerHTML = `<input type="radio" name="field-${escapeHtml(key)}" id="${id}" value="${escapeHtml(o.value)}" ${String(o.value)===current?"checked":""}> <span>${escapeHtml(o.text)}</span>`;
+          group.appendChild(lab);
+        });
+        // hidden carrier for save
+        const hidden = document.createElement("input");
+        hidden.type = "hidden";
+        hidden.id = "field-" + key;
+        hidden.value = current;
+        group.querySelectorAll("input[type=radio]").forEach(r => {
+          r.onchange = () => { hidden.value = r.value; };
+        });
+        controlWrap.appendChild(group);
+        controlWrap.appendChild(hidden);
+        row.appendChild(labelEl);
+        row.appendChild(controlWrap);
+      } else {
+        const safeVal = escapeHtml(value);
+        controlWrap.innerHTML = `<input type="text" id="field-${escapeHtml(key)}" value="${safeVal}"
+          style="flex:1; width:100%; padding:9px 12px; border:1px solid #d0d5dd; border-radius:6px; font-size:14px; box-sizing:border-box;">`;
+        row.appendChild(labelEl);
+        row.appendChild(controlWrap);
+      }
+      container.appendChild(row);
     }
 
-    if (Object.keys(data.fields).length === 0) {
+    function applyShowHide(root) {
+      // Collect groups discovered from field paths (fully dynamic)
+      const groupSet = new Set();
+      root.querySelectorAll("[data-showhide-group]").forEach(el => {
+        if (el.dataset.showhideGroup) groupSet.add(el.dataset.showhideGroup);
+      });
+
+      // Friendly labels derived from group id only (no component hardcoding)
+      function labelFor(g) {
+        const map = {
+          children: "Child pages",
+          static: "Fixed list",
+          search: "Search",
+          tags: "Tags"
+        };
+        if (map[g]) return map[g];
+        // generic: capitalize
+        return g.charAt(0).toUpperCase() + g.slice(1).replace(/([A-Z])/g, " $1");
+      }
+
+      const controllers = root.querySelectorAll("select[data-showhide-controller], [data-is-showhide-controller='1'] select");
+      controllers.forEach(sel => {
+        const current = sel.dataset.currentValue || sel.value || "";
+        // Build options from discovered groups
+        const groups = Array.from(groupSet);
+        if (current && !groups.includes(current)) groups.unshift(current);
+        if (groups.length === 0 && current) groups.push(current);
+
+        sel.innerHTML = "";
+        groups.forEach(g => {
+          const opt = document.createElement("option");
+          opt.value = g;
+          opt.textContent = labelFor(g);
+          if (g === current) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        if (!sel.value && groups.length) sel.value = groups[0];
+
+        const run = () => {
+          const val = sel.value;
+          root.querySelectorAll(".field-row[data-showhide-group]").forEach(row => {
+            row.style.display = (row.dataset.showhideGroup === val) ? "flex" : "none";
+          });
+          root.querySelectorAll(".multifield-wrap[data-showhide-group]").forEach(w => {
+            w.style.display = (w.dataset.showhideGroup === val) ? "block" : "none";
+          });
+        };
+        sel.onchange = run;
+        run();
+      });
+    }
+
+    function normalizeMultifieldValues(raw) {
+      if (raw == null || raw === "") return [];
+      if (Array.isArray(raw)) {
+        return raw.map(v => {
+          if (v && typeof v === "object") {
+            // composite item – take first string-ish value or JSON
+            const vals = Object.values(v).filter(x => typeof x === "string" || typeof x === "number");
+            return vals.length ? String(vals[0]) : JSON.stringify(v);
+          }
+          return String(v);
+        });
+      }
+      if (typeof raw === "string") return raw ? [raw] : [];
+      return [String(raw)];
+    }
+
+
+    function renderMultifield(container, mfKey, mfLabel, itemFields, currentValue, metaPath) {
+      const wrap = document.createElement("div");
+      wrap.className = "multifield-wrap";
+      wrap.style.cssText = "margin:14px 0 18px 0; padding:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;";
+      const grp = inferShowHideGroup(metaPath);
+      if (grp) wrap.dataset.showhideGroup = grp;
+
+      const title = document.createElement("div");
+      title.style.cssText = "font-weight:600; font-size:13px; margin-bottom:10px; color:#1e293b;";
+      title.textContent = mfLabel || mfKey || "Items";
+      wrap.appendChild(title);
+
+      const listEl = document.createElement("div");
+      listEl.className = "multifield-list";
+      listEl.dataset.mfKey = mfKey;
+      wrap.appendChild(listEl);
+
+      const cols = (itemFields && itemFields.length)
+        ? itemFields.map(f => ({ name: f.name, label: f.label || f.name }))
+        : [{ name: "value", label: "Value" }];
+
+      // Normalize current values to array of row objects
+      function normalizeRows(raw) {
+        if (raw == null || raw === "") return [];
+        const arr = Array.isArray(raw) ? raw : [raw];
+        return arr.map(item => {
+          if (item != null && typeof item === "object" && !Array.isArray(item)) {
+            const row = {};
+            cols.forEach(c => { row[c.name] = item[c.name] != null ? item[c.name] : ""; });
+            // if object used different keys, copy first string values
+            if (cols.every(c => !row[c.name])) {
+              const vals = Object.values(item).filter(v => typeof v === "string");
+              cols.forEach((c, i) => { row[c.name] = vals[i] || ""; });
+            }
+            return row;
+          }
+          const row = {};
+          cols.forEach((c, i) => { row[c.name] = i === 0 ? String(item ?? "") : ""; });
+          return row;
+        });
+      }
+
+      multifieldState[mfKey] = normalizeRows(currentValue);
+
+      function redraw() {
+        listEl.innerHTML = "";
+        multifieldState[mfKey].forEach((row, idx) => {
+          const item = document.createElement("div");
+          item.style.cssText = "display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;";
+          cols.forEach(c => {
+            const inp = document.createElement("input");
+            inp.type = "text";
+            inp.placeholder = c.label || c.name;
+            inp.value = row[c.name] != null ? row[c.name] : "";
+            inp.dataset.mfKey = mfKey;
+            inp.dataset.mfIdx = String(idx);
+            inp.dataset.mfCol = c.name;
+            inp.style.cssText = "flex:1; min-width:120px; padding:8px 10px; border:1px solid #d0d5dd; border-radius:6px; font-size:13px;";
+            inp.oninput = () => {
+              multifieldState[mfKey][idx][c.name] = inp.value;
+            };
+            item.appendChild(inp);
+          });
+          const del = document.createElement("button");
+          del.type = "button";
+          del.title = "Remove";
+          del.textContent = "🗑";
+          del.style.cssText = "border:1px solid #e2e8f0; background:#fff; border-radius:6px; padding:6px 10px; cursor:pointer; color:#b91c1c;";
+          del.onclick = () => {
+            multifieldState[mfKey].splice(idx, 1);
+            redraw();
+          };
+          item.appendChild(del);
+          listEl.appendChild(item);
+        });
+      }
+
+      redraw();
+
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.textContent = "Add";
+      addBtn.style.cssText = "margin-top:4px; padding:7px 16px; border:1px solid #cbd5e1; background:#fff; border-radius:6px; cursor:pointer; font-size:13px; font-weight:500;";
+      addBtn.onclick = () => {
+        const blank = {};
+        cols.forEach(c => { blank[c.name] = ""; });
+        multifieldState[mfKey].push(blank);
+        redraw();
+      };
+      wrap.appendChild(addBtn);
+      container.appendChild(wrap);
+    }
+
+    function renderFieldsInto(container, fieldsArr, multifieldsArr, renderedKeys) {
+      (fieldsArr || []).forEach(f => {
+        let key = f.name;
+        if (!key) return;
+        // fileupload → use storage param
+        if (f.fileReferenceParameter) {
+          key = f.fileReferenceParameter;
+        }
+        if (renderedKeys.has(key)) return;
+        renderedKeys.add(key);
+        const value = currentFields[key] ?? "";
+        const meta = { ...f, label: f.label || key, type: f.type, resourceType: f.resourceType };
+        renderFieldControl(container, key, value, meta);
+      });
+
+      (multifieldsArr || []).forEach(mf => {
+        let mfKey = mf.name || mf.label || "multifield";
+        if (mfKey.toLowerCase() === "multi" || mfKey.toLowerCase() === "multifield") {
+          const it = (mf.itemFields || []).find(f => f.name);
+          if (it) mfKey = it.name;
+        }
+        if (renderedKeys.has(mfKey)) return;
+        renderedKeys.add(mfKey);
+        const currentVal = mf.currentValues || currentFields[mfKey] || [];
+        const label = (mf.label && mf.label.toLowerCase() !== "multi") ? mf.label : (mfKey === "pages" ? "Pages (Fixed List)" : mfKey);
+        renderMultifield(container, mfKey, label, mf.itemFields || [], currentVal, mf.path);
+      });
+    }
+
+    // ---------- interactive tabs ----------
+    const tabsWithContent = tabs.filter(t =>
+      (t.fields && t.fields.length) || (t.multifields && t.multifields.length)
+    );
+
+    const renderedKeys = new Set();
+
+    if (tabsWithContent.length > 1) {
+      // Tab bar
+      const tabBar = document.createElement("div");
+      tabBar.style.cssText = "display:flex; gap:0; border-bottom:2px solid #e2e8f0; margin-bottom:16px; flex-wrap:wrap;";
+      formEl.appendChild(tabBar);
+
+      const panelsWrap = document.createElement("div");
+      formEl.appendChild(panelsWrap);
+
+      tabsWithContent.forEach((tab, idx) => {
+        let tabTitle = tab.title || tab.name || `Tab ${idx + 1}`;
+        if (String(tabTitle).toLowerCase() === "tabs") {
+          tabTitle = `Section ${idx + 1}`;
+        }
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = tabTitle;
+        btn.dataset.tabIdx = String(idx);
+        btn.style.cssText = `
+          padding:10px 18px; border:none; background:transparent; cursor:pointer;
+          font-size:13px; font-weight:500; color:#64748b; border-bottom:2px solid transparent;
+          margin-bottom:-2px;`;
+        tabBar.appendChild(btn);
+
+        const panel = document.createElement("div");
+        panel.dataset.tabPanel = String(idx);
+        panel.style.display = idx === 0 ? "block" : "none";
+        panelsWrap.appendChild(panel);
+
+        renderFieldsInto(panel, tab.fields, tab.multifields, renderedKeys);
+
+        btn.onclick = () => {
+          tabBar.querySelectorAll("button").forEach(b => {
+            b.style.color = "#64748b";
+            b.style.borderBottomColor = "transparent";
+            b.style.fontWeight = "500";
+          });
+          btn.style.color = "#2563eb";
+          btn.style.borderBottomColor = "#2563eb";
+          btn.style.fontWeight = "600";
+          panelsWrap.querySelectorAll("[data-tab-panel]").forEach(p => {
+            p.style.display = p.dataset.tabPanel === String(idx) ? "block" : "none";
+          });
+        };
+
+        if (idx === 0) {
+          btn.style.color = "#2563eb";
+          btn.style.borderBottomColor = "#2563eb";
+          btn.style.fontWeight = "600";
+        }
+      });
+    } else if (tabsWithContent.length === 1) {
+      const tab = tabsWithContent[0];
+      renderFieldsInto(formEl, tab.fields, tab.multifields, renderedKeys);
+    }
+
+    // Top-level multifields not nested in tabs
+    topMultifields.forEach(mf => {
+      let mfKey = mf.name || mf.label || "multifield";
+      if (mfKey.toLowerCase() === "multi" || mfKey.toLowerCase() === "multifield") {
+        const it = (mf.itemFields || []).find(f => f.name);
+        if (it) mfKey = it.name;
+      }
+      if (renderedKeys.has(mfKey)) return;
+      renderedKeys.add(mfKey);
+      const currentVal = mf.currentValues || currentFields[mfKey] || [];
+      const label = (mf.label && mf.label.toLowerCase() !== "multi") ? mf.label : (mfKey === "pages" ? "Pages (Fixed List)" : mfKey);
+      renderMultifield(formEl, mfKey, label, mf.itemFields || [], currentVal, mf.path);
+    });
+
+    // Remaining flat fields
+    for (const [key, value] of Object.entries(currentFields)) {
+      if (renderedKeys.has(key)) continue;
+      if (multifieldState[key]) continue;
+      const meta = fieldMeta[key] || { label: key };
+      // skip empty technical keys
+      if (!key || key.includes("@TypeHint")) continue;
+      renderFieldControl(formEl, key, value, meta);
+      renderedKeys.add(key);
+    }
+
+    if (renderedKeys.size === 0 && Object.keys(currentFields).length === 0) {
       formEl.innerHTML = "<p>No editable fields found for this component.</p>";
     }
+
+    // Wire dropdown → show/hide field groups (AEM cq-dialog-dropdown-showhide behaviour)
+    applyShowHide(formEl);
   } catch (error) {
     formEl.innerHTML = `<p class="message error">${error.message}</p>`;
   }
@@ -297,16 +648,41 @@ async function saveChanges() {
   messageEl.textContent = "Saving...";
   messageEl.className = "message";
 
-  // Collect changed values
   const properties = {};
+
+  // Normal fields (text + checkbox)
   for (const key of Object.keys(currentFields)) {
+    if (multifieldState.hasOwnProperty(key)) continue;
     const input = document.getElementById(`field-${key}`);
-    if (input) {
-      const newValue = input.value;
-      // Only send if changed
-      if (String(newValue) !== String(currentFields[key] ?? "")) {
-        properties[key] = newValue;
+    if (!input) continue;
+    let newValue;
+    if (input.type === "checkbox") {
+      newValue = input.checked ? "true" : "false";
+    } else {
+      newValue = input.value;
+    }
+    if (String(newValue) !== String(currentFields[key] ?? "")) {
+      properties[key] = newValue;
+    }
+  }
+
+  // Multifields – composite rows or simple strings
+  for (const [mfKey, values] of Object.entries(multifieldState)) {
+    const cleaned = (values || []).map(v => {
+      if (v && typeof v === "object") {
+        const row = {};
+        Object.keys(v).forEach(k => {
+          const s = String(v[k] ?? "").trim();
+          if (s) row[k] = s;
+        });
+        return Object.keys(row).length ? row : null;
       }
+      const s = String(v ?? "").trim();
+      return s || null;
+    }).filter(Boolean);
+    const oldRaw = currentFields[mfKey];
+    if (JSON.stringify(cleaned) !== JSON.stringify(oldRaw || [])) {
+      properties[mfKey] = cleaned;
     }
   }
 
@@ -316,7 +692,8 @@ async function saveChanges() {
     return;
   }
 
-  try {
+
+    try {
     const response = await fetch(
       `${API_BASE}/api/aem/component/update?component_path=${encodeURIComponent(selectedComponentPath)}`,
       {
@@ -557,163 +934,5 @@ async function applyExcel() {
         messageEl.textContent = error.message;
         messageEl.className = "message error";
         console.error("Apply error:", error);
-    }
-}
-
-// ========== COMPONENT CATALOG + TEMPLATE GENERATOR ==========
-let catalogData = null;
-let selectedCatalogItems = {};   // key = resourceType|version → {fields: Set}
-
-async function loadCatalog() {
-    const messageEl = document.getElementById("catalog-message");
-    const listEl = document.getElementById("catalog-list");
-    const genBtn = document.getElementById("generate-template-btn");
-
-    messageEl.textContent = "Loading catalog...";
-    messageEl.className = "message";
-    listEl.innerHTML = "";
-    genBtn.style.display = "none";
-    selectedCatalogItems = {};
-
-    try {
-        const response = await fetch(`${API_BASE}/api/catalog/list`, {
-            headers: { "Authorization": `Bearer ${accessToken}` }
-        });
-        const data = await response.json();
-
-        if (!response.ok || data.status !== "success") {
-            throw new Error(data.message || "Failed to load catalog");
-        }
-
-        catalogData = data.components;
-        messageEl.textContent = `Catalog loaded – ${data.total_components} components`;
-        messageEl.className = "message success";
-
-        if (data.total_components === 0) {
-            listEl.innerHTML = "<p>No components in catalog yet. Load a page first so components are stored.</p>";
-            return;
-        }
-
-        let html = "";
-        for (const [resourceType, info] of Object.entries(catalogData)) {
-            const shortName = resourceType.split("/").pop();
-            html += `<div style="border:1px solid #e0e0e0; border-radius:8px; padding:12px; margin-bottom:12px;">
-                <strong style="font-size:15px;">${shortName}</strong>
-                <div style="font-size:12px; color:#666; margin-bottom:8px;">${resourceType}</div>`;
-
-            info.versions.forEach(v => {
-                const key = `${resourceType}|${v.version}`;
-                html += `<div style="margin-left:10px; margin-bottom:8px; padding:8px; background:#f8f9fa; border-radius:6px;">
-                    <label style="font-weight:600;">
-                        <input type="checkbox" onchange="toggleComponentSelection('${key}', this.checked)" style="margin-right:6px;">
-                        ${v.version} (${v.fields.length} fields)
-                    </label>
-                    <button onclick="toggleFieldsView('${key}')" style="margin-left:10px; font-size:12px; padding:2px 8px;">Show / Hide Fields</button>
-                    <div id="fields-${key.replace('|', '-')}" style="display:none; margin-top:8px; font-size:13px;">`;
-
-                v.fields.forEach(f => {
-                    html += `<label style="display:inline-block; margin:3px 8px 3px 0;">
-                        <input type="checkbox" class="field-check" data-key="${key}" value="${f}" checked style="margin-right:3px;">
-                        ${f}
-                    </label>`;
-                });
-
-                html += `</div></div>`;
-            });
-            html += `</div>`;
-        }
-
-        listEl.innerHTML = html;
-        genBtn.style.display = "inline-block";
-
-    } catch (error) {
-        messageEl.textContent = error.message;
-        messageEl.className = "message error";
-    }
-}
-
-function toggleFieldsView(key) {
-    const id = "fields-" + key.replace("|", "-");
-    const el = document.getElementById(id);
-    if (el) {
-        el.style.display = el.style.display === "none" ? "block" : "none";
-    }
-}
-
-function toggleComponentSelection(key, checked) {
-    if (checked) {
-        selectedCatalogItems[key] = true;
-    } else {
-        delete selectedCatalogItems[key];
-    }
-}
-async function generateTemplateFromCatalog() {
-    const messageEl = document.getElementById("catalog-message");
-
-    const selections = [];
-
-    for (const key of Object.keys(selectedCatalogItems)) {
-        const [resourceType, version] = key.split("|");
-        const versionInfo = catalogData[resourceType].versions.find(v => v.version === version);
-        if (!versionInfo) continue;
-
-        // Collect checked fields
-        const fieldChecks = document.querySelectorAll(`.field-check[data-key="${key}"]`);
-        const selectedFields = [];
-        fieldChecks.forEach(cb => {
-            if (cb.checked) selectedFields.push(cb.value);
-        });
-
-        if (selectedFields.length === 0) continue;
-
-        selections.push({
-            resourceType: resourceType,
-            version: version,
-            fields: selectedFields,
-            label: resourceType.split("/").pop()
-        });
-    }
-
-    if (selections.length === 0) {
-        messageEl.textContent = "Please select at least one component and some fields";
-        messageEl.className = "message error";
-        return;
-    }
-
-    messageEl.textContent = "Generating Excel template...";
-    messageEl.className = "message";
-
-    try {
-        const response = await fetch(`${API_BASE}/api/catalog/generate-template`, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${accessToken}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ selections })
-        });
-
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.message || err.detail || "Generation failed");
-        }
-
-        // Download the file
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "AEM_Template_From_Catalog.xlsx";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-
-        messageEl.textContent = "Excel template downloaded successfully!";
-        messageEl.className = "message success";
-
-    } catch (error) {
-        messageEl.textContent = error.message;
-        messageEl.className = "message error";
     }
 }
