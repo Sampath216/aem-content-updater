@@ -4,6 +4,7 @@ from backend.app.core.config import get_settings
 import logging
 from backend.app.models.audit import SessionLocal, AuditLog
 from datetime import datetime
+import copy
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,9 +15,15 @@ settings = get_settings()
 class AEMClient:
     """
     Professional client to communicate with Adobe Experience Manager.
-    Includes Effective Dialog Resolution Engine that follows
-    sling:resourceSuperType inheritance and discovers fields from
-    the complete inheritance chain (project + Core Components).
+
+    Effective Dialog Resolution – Option B (basic Sling Resource Merger)
+    -------------------------------------------------------------------
+    Walks the full sling:resourceSuperType chain, collects every cq:dialog,
+    then merges them from parent → child while respecting:
+      - sling:hideResource
+      - sling:hideChildren
+      - node overrides (child wins)
+    Fields are extracted only from the final merged effective dialog.
     """
 
     def __init__(self):
@@ -112,7 +119,6 @@ class AEMClient:
     # -------------------------------------------------------------------------
 
     def _resolve_component_definition(self, resource_type: str) -> str | None:
-        """Resolve resourceType to actual repository path (/apps or /libs)."""
         if not resource_type:
             return None
         for base in ["/apps/", "/libs/"]:
@@ -127,7 +133,6 @@ class AEMClient:
         return None
 
     def _get_super_type(self, component_def_path: str) -> str | None:
-        """Read sling:resourceSuperType from a component definition."""
         try:
             url = f"{self.base_url}{component_def_path}.json"
             resp = self.session.get(url, timeout=5)
@@ -138,7 +143,6 @@ class AEMClient:
         return None
 
     def _find_dialog_path(self, component_def_path: str) -> str | None:
-        """Return cq:dialog or _cq_dialog path if it exists under the component."""
         for name in ["cq:dialog", "_cq_dialog"]:
             dialog_path = f"{component_def_path}/{name}"
             try:
@@ -150,24 +154,25 @@ class AEMClient:
                 continue
         return None
 
-    def _build_inheritance_chain(self, resource_type: str) -> dict:
+    def _load_dialog_tree(self, dialog_path: str) -> dict | None:
+        try:
+            url = f"{self.base_url}{dialog_path}.infinity.json"
+            resp = self.session.get(url, timeout=10)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.warning(f"Failed to load dialog {dialog_path}: {e}")
+        return None
+
+    def _build_dialog_chain(self, resource_type: str) -> dict:
         """
-        Build the complete resource type inheritance chain.
-        Does NOT stop when a dialog is found.
-        Returns:
-        {
-            "component_definition": "...",
-            "inheritance_chain": ["child", "parent", "grandparent", ...],
-            "dialogs": [
-                {"resourceType": "...", "component_definition": "...", "dialog_path": "..."},
-                ...
-            ]
-        }
+        Build the full inheritance chain and collect every dialog along it.
+        Returns dialogs in order from MOST SPECIFIC (child) to LEAST SPECIFIC (parent).
         """
         result = {
             "component_definition": None,
             "inheritance_chain": [],
-            "dialogs": []
+            "dialogs": []   # list of {"resourceType", "component_definition", "dialog_path", "tree"}
         }
 
         visited = set()
@@ -184,33 +189,105 @@ class AEMClient:
             if result["component_definition"] is None:
                 result["component_definition"] = comp_def
 
-            dialog = self._find_dialog_path(comp_def)
-            if dialog:
-                result["dialogs"].append({
-                    "resourceType": current,
-                    "component_definition": comp_def,
-                    "dialog_path": dialog
-                })
+            dialog_path = self._find_dialog_path(comp_def)
+            if dialog_path:
+                tree = self._load_dialog_tree(dialog_path)
+                if tree is not None:
+                    result["dialogs"].append({
+                        "resourceType": current,
+                        "component_definition": comp_def,
+                        "dialog_path": dialog_path,
+                        "tree": tree
+                    })
 
             current = self._get_super_type(comp_def)
 
         return result
 
     # -------------------------------------------------------------------------
+    # Sling Resource Merger (basic implementation for dialogs)
+    # -------------------------------------------------------------------------
+
+    def _merge_dialog_trees(self, parent: dict, child: dict) -> dict:
+        """
+        Merge two dialog trees with child taking precedence.
+        Respects:
+          - sling:hideResource = true  → node is removed
+          - sling:hideChildren         → listed children are removed
+          - same-named nodes           → child overrides / deep-merges
+        """
+        if not isinstance(parent, dict):
+            parent = {}
+        if not isinstance(child, dict):
+            return copy.deepcopy(parent)
+
+        # If child itself is marked hideResource, the whole node disappears
+        if str(child.get("sling:hideResource", "")).lower() in ("true", "true"):
+            return {}
+
+        merged = copy.deepcopy(parent)
+
+        # Handle sling:hideChildren from the child
+        hide_children = child.get("sling:hideChildren")
+        if hide_children:
+            if isinstance(hide_children, str):
+                hide_list = [c.strip() for c in hide_children.split(",")]
+            elif isinstance(hide_children, list):
+                hide_list = hide_children
+            else:
+                hide_list = []
+            for name in hide_list:
+                if name in merged:
+                    del merged[name]
+
+        for key, child_value in child.items():
+            if key.startswith("jcr:") or key == "sling:hideResource" or key == "sling:hideChildren":
+                # Copy structural / control properties from child
+                if key not in ("sling:hideResource", "sling:hideChildren"):
+                    merged[key] = child_value
+                continue
+
+            if key in merged and isinstance(merged[key], dict) and isinstance(child_value, dict):
+                # Deep merge
+                merged[key] = self._merge_dialog_trees(merged[key], child_value)
+            else:
+                # Child overrides or adds
+                if isinstance(child_value, dict) and str(child_value.get("sling:hideResource", "")).lower() in ("true", "true"):
+                    # Child is hiding this node → remove it
+                    if key in merged:
+                        del merged[key]
+                else:
+                    merged[key] = copy.deepcopy(child_value)
+
+        return merged
+
+    def _build_effective_dialog_tree(self, dialogs: list) -> dict | None:
+        """
+        dialogs is ordered most-specific → least-specific.
+        We merge from least-specific (parent) to most-specific (child).
+        """
+        if not dialogs:
+            return None
+
+        # Reverse so we start with the deepest parent
+        ordered = list(reversed(dialogs))
+
+        effective = copy.deepcopy(ordered[0]["tree"])
+        for d in ordered[1:]:
+            effective = self._merge_dialog_trees(effective, d["tree"])
+
+        return effective
+
+    # -------------------------------------------------------------------------
     # Field Identification & Parsing
     # -------------------------------------------------------------------------
 
     def _is_form_field(self, node: dict) -> bool:
-        """
-        Decide if a dialog node is a real authorable form field.
-        Based on sling:resourceType of Granite / Coral / AEM authoring widgets.
-        """
         rt = (node.get("sling:resourceType") or "").lower()
         if not rt:
             return False
 
         form_indicators = [
-            # Standard Granite / Coral form fields
             "/form/textfield",
             "/form/textarea",
             "/form/pathfield",
@@ -231,16 +308,12 @@ class AEMClient:
             "/foundation/form/",
             "granite/ui/components/coral/foundation/form/",
             "granite/ui/components/foundation/form/",
-
-            # AEM authoring specific (including fileupload used by Core Image)
             "cq/gui/components/authoring/dialog/fileupload",
             "cq/gui/components/authoring/dialog/richtext",
             "cq/gui/components/common/wcm/pathfield",
-            "cq/gui/components/authoring/dialog/fileupload",
             "cq/gui/components/coral/common/form/",
             "dam/gui/coral/components/",
         ]
-
         return any(ind in rt for ind in form_indicators)
 
     def _normalize_field_name(self, name: str) -> str:
@@ -252,18 +325,16 @@ class AEMClient:
         return name
 
     def _parse_dialog_fields(self, dialog_data: dict, source_info: dict, fields: list = None) -> list:
-        """
-        Recursively walk a dialog tree and collect real form fields.
-        Attaches provenance and special configuration properties
-        (fileReferenceParameter, fileNameParameter, etc.).
-        """
         if fields is None:
             fields = []
 
         if not isinstance(dialog_data, dict):
             return fields
 
-        # Real form field?
+        # Skip nodes that were hidden
+        if str(dialog_data.get("sling:hideResource", "")).lower() in ("true", "true"):
+            return fields
+
         if self._is_form_field(dialog_data):
             raw_name = dialog_data.get("name", "")
             name = self._normalize_field_name(raw_name)
@@ -280,13 +351,10 @@ class AEMClient:
                     "required": str(dialog_data.get("required", "")).lower() in ("true", "true"),
                     "hidden": str(dialog_data.get("hidden", "")).lower() in ("true", "true"),
                     "readOnly": str(dialog_data.get("readOnly", "")).lower() in ("true", "true"),
-                    # Provenance
                     "inheritedFrom": source_info.get("resourceType"),
                     "dialogPath": source_info.get("dialog_path"),
                     "componentDefinition": source_info.get("component_definition"),
                 }
-
-                # Important configuration mappings (must NOT become separate fields)
                 if dialog_data.get("fileReferenceParameter"):
                     field["fileReferenceParameter"] = self._normalize_field_name(
                         dialog_data.get("fileReferenceParameter")
@@ -295,17 +363,10 @@ class AEMClient:
                     field["fileNameParameter"] = self._normalize_field_name(
                         dialog_data.get("fileNameParameter")
                     )
-                if dialog_data.get("fileReference"):
-                    field["fileReference"] = dialog_data.get("fileReference")
-
-                # Avoid exact name duplicates (child wins because we process child first)
                 if not any(f["name"] == name for f in fields):
                     fields.append(field)
-
-            # Do not recurse into the internals of a field widget
             return fields
 
-        # Structural node → recurse
         for key, value in dialog_data.items():
             if key.startswith(("jcr:", "sling:", "cq:")):
                 continue
@@ -315,15 +376,11 @@ class AEMClient:
         return fields
 
     # -------------------------------------------------------------------------
-    # Effective Dialog Resolution + Field Extraction
+    # Public Dialog Resolution
     # -------------------------------------------------------------------------
 
     def get_dialog_fields_for_resource_type(self, resource_type: str) -> dict:
-        """
-        Resolve the complete inheritance chain, collect dialogs from every level,
-        and extract all authorable fields (child overrides parent by name).
-        """
-        chain = self._build_inheritance_chain(resource_type)
+        chain = self._build_dialog_chain(resource_type)
 
         if not chain["dialogs"]:
             return {
@@ -333,19 +390,24 @@ class AEMClient:
                 "fields": []
             }
 
-        all_fields = []
-        # Process from child → parent so that child fields take precedence
-        for dialog_info in chain["dialogs"]:
-            try:
-                url = f"{self.base_url}{dialog_info['dialog_path']}.infinity.json"
-                resp = self.session.get(url, timeout=10)
-                if resp.status_code != 200:
-                    continue
-                dialog_data = resp.json()
-                self._parse_dialog_fields(dialog_data, dialog_info, all_fields)
-            except Exception as e:
-                logger.warning(f"Failed to load dialog {dialog_info['dialog_path']}: {e}")
-                continue
+        effective_tree = self._build_effective_dialog_tree(chain["dialogs"])
+        if effective_tree is None:
+            return {
+                "status": "error",
+                "message": "Could not build effective dialog tree",
+                "resolution": chain,
+                "fields": []
+            }
+
+        # Use the most specific dialog that contributed as the primary source for provenance
+        primary = chain["dialogs"][0]
+        source_info = {
+            "resourceType": primary["resourceType"],
+            "dialog_path": primary["dialog_path"],
+            "component_definition": primary["component_definition"]
+        }
+
+        fields = self._parse_dialog_fields(effective_tree, source_info)
 
         return {
             "status": "success",
@@ -358,16 +420,13 @@ class AEMClient:
                         "dialog_path": d["dialog_path"]
                     }
                     for d in chain["dialogs"]
-                ]
+                ],
+                "resolution_strategy": "sling-resource-merger-basic (Option B)"
             },
-            "fields": all_fields
+            "fields": fields
         }
 
     def diagnose_component_dialog(self, component_path: str) -> dict:
-        """
-        Full diagnostic of the effective dialog resolution for a component.
-        Shows the complete inheritance chain and every dialog that was considered.
-        """
         try:
             url = f"{self.base_url}{component_path}.json"
             response = self.session.get(url, timeout=self.timeout)
@@ -381,22 +440,17 @@ class AEMClient:
             data = response.json()
             resource_type = data.get("sling:resourceType", "")
 
-            chain = self._build_inheritance_chain(resource_type)
             dialog_result = self.get_dialog_fields_for_resource_type(resource_type)
+            resolution = dialog_result.get("resolution", {})
 
             return {
                 "status": "success",
                 "componentPath": component_path,
                 "resourceType": resource_type,
-                "componentDefinition": chain.get("component_definition"),
-                "inheritanceChain": chain.get("inheritance_chain", []),
-                "dialogsFound": [
-                    {
-                        "resourceType": d["resourceType"],
-                        "dialog_path": d["dialog_path"]
-                    }
-                    for d in chain.get("dialogs", [])
-                ],
+                "componentDefinition": resolution.get("component_definition"),
+                "inheritanceChain": resolution.get("inheritance_chain", []),
+                "dialogsFound": resolution.get("dialogs_found", []),
+                "resolutionStrategy": resolution.get("resolution_strategy"),
                 "fieldCount": len(dialog_result.get("fields", [])),
                 "fields": dialog_result.get("fields", []),
                 "diagnostics": []
@@ -410,14 +464,10 @@ class AEMClient:
             }
 
     # -------------------------------------------------------------------------
-    # Public API – Get fields + current values for a component
+    # Public API – Get fields + current values
     # -------------------------------------------------------------------------
 
     def get_component_fields(self, component_path: str) -> dict:
-        """
-        Returns the exact authorable fields from the effective dialog(s)
-        + their current values from the component instance.
-        """
         try:
             url = f"{self.base_url}{component_path}.json"
             response = self.session.get(url, timeout=self.timeout)
@@ -440,30 +490,25 @@ class AEMClient:
             if dialog_result.get("status") == "success":
                 for f in dialog_result.get("fields", []):
                     name = f["name"]
-                    # Current value from the component instance
-                    current_value = data.get(name, "")
-                    if current_value is None:
-                        current_value = ""
 
-                    # Special handling for fileupload: the storage property
-                    # is often fileReference, not the dialog name "file"
                     if f.get("fileReferenceParameter"):
-                        ref_name = f["fileReferenceParameter"]
-                        ref_value = data.get(ref_name, "")
-                        if ref_value is None:
-                            ref_value = ""
-                        # Expose the storage property that authors actually care about
-                        fields[ref_name] = ref_value
-                        field_meta[ref_name] = {
+                        storage_name = f["fileReferenceParameter"]
+                        current_value = data.get(storage_name, "")
+                        if current_value is None:
+                            current_value = ""
+                        fields[storage_name] = current_value
+                        field_meta[storage_name] = {
                             **f,
-                            "storageName": ref_name,
+                            "storageName": storage_name,
                             "dialogName": name
                         }
                     else:
+                        current_value = data.get(name, "")
+                        if current_value is None:
+                            current_value = ""
                         fields[name] = current_value
                         field_meta[name] = f
             else:
-                # Fallback (rare) – only simple authored values
                 skip_keys = {
                     "jcr:primaryType", "jcr:created", "jcr:createdBy",
                     "jcr:lastModified", "jcr:lastModifiedBy", "jcr:mixinTypes",
@@ -491,14 +536,10 @@ class AEMClient:
             return {"status": "error", "message": str(e), "path": component_path}
 
     # -------------------------------------------------------------------------
-    # Strict Update (never creates new fields)
+    # Strict Update
     # -------------------------------------------------------------------------
 
     def update_component(self, component_path: str, properties: dict, performed_by: str = "system") -> dict:
-        """
-        Strict update: Only fields that exist in the component dialog are allowed.
-        Never creates new fields in CRXDE.
-        """
         db = SessionLocal()
         try:
             if not properties:
@@ -592,9 +633,5 @@ class AEMClient:
     # -------------------------------------------------------------------------
 
     def get_page_properties_fields(self, page_path: str) -> dict:
-        """
-        Get all authorable fields for Page Properties using the same
-        Effective Dialog Resolution Engine.
-        """
         component_path = f"{page_path.rstrip('/')}/jcr:content"
         return self.get_component_fields(component_path)
