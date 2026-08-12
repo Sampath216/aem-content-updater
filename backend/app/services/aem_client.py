@@ -188,16 +188,21 @@ class AEMClient:
             candidates.extend([f"/apps/{rest}", f"/libs/{rest}"])
 
         for candidate in candidates:
-            try:
-                url = f"{self.base_url}{candidate}.infinity.json"
-                resp = self.session.get(url, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    self._include_cache[path] = data
-                    return data
-            except Exception:
-                continue
-        logger.info(f"Could not load include path: {path}")
+            for suffix in (".infinity.json", ".json"):
+                try:
+                    url = f"{self.base_url}{candidate}{suffix}"
+                    resp = self.session.get(url, timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if isinstance(data, dict):
+                            self._include_cache[path] = data
+                            return data
+                except Exception:
+                    continue
+        try:
+            logger.info(f"Could not load include path: {path}")
+        except Exception:
+            pass
         self._include_cache[path] = None
         return None
 
@@ -211,7 +216,7 @@ class AEMClient:
         if not isinstance(child, dict):
             return copy.deepcopy(parent)
 
-        if str(child.get("sling:hideResource", "")).lower() in ("true", "true"):
+        if self._as_bool(child.get("sling:hideResource")):
             return {}
 
         merged = copy.deepcopy(parent)
@@ -237,7 +242,7 @@ class AEMClient:
             if key in merged and isinstance(merged[key], dict) and isinstance(child_value, dict):
                 merged[key] = self._merge_dialog_trees(merged[key], child_value)
             else:
-                if isinstance(child_value, dict) and str(child_value.get("sling:hideResource", "")).lower() in ("true", "true"):
+                if isinstance(child_value, dict) and self._as_bool(child_value.get("sling:hideResource")):
                     merged.pop(key, None)
                 else:
                     merged[key] = copy.deepcopy(child_value)
@@ -293,8 +298,13 @@ class AEMClient:
 
     def _is_include_node(self, node: dict) -> bool:
         """Detect include purely from resourceType – no hardcoding of paths."""
-        rt = (node.get("sling:resourceType") or "").lower()
-        return "include" in rt and "granite" in rt
+        rt = (node.get("sling:resourceType") or node.get("resourceType") or "").lower()
+        if not rt:
+            return False
+        # granite coral/foundation include, or any */include widget
+        if "include" not in rt:
+            return False
+        return True
 
     def _discover_tree(self, node: dict, path: str, name: str = "", depth: int = 0) -> dict | None:
         """
@@ -310,7 +320,7 @@ class AEMClient:
 
         # Expand include dynamically
         if self._is_include_node(node):
-            include_path = node.get("path")
+            include_path = node.get("path") or (node.get("properties") or {}).get("path")
             if include_path:
                 included = self._load_repository_path(include_path)
                 if included and isinstance(included, dict):
@@ -551,15 +561,21 @@ class AEMClient:
         name = self._normalize_name(raw_name)
         rt = node.get("resourceType") or ""
         type_name = rt.split("/")[-1] if rt else "unknown"
-        disabled = str(props.get("disabled", "")).lower() in ("true", "true")
+        disabled = self._as_bool(props.get("disabled"))
         read_only = (
-            str(props.get("readOnly", "")).lower() in ("true", "true")
-            or str(props.get("renderReadOnly", "")).lower() in ("true", "true")
+            self._as_bool(props.get("readOnly"))
+            or self._as_bool(props.get("renderReadOnly"))
             or disabled
         )
-        hidden = (
-            str(props.get("hidden", "")).lower() in ("true", "true")
-            or str(props.get("hide", "")).lower() in ("true", "true")
+        hidden = self._as_bool(props.get("hidden")) or self._as_bool(props.get("hide"))
+        # Create-only fields (common on page dialogs) — not editable when page already exists
+        show_on_create = (
+            self._as_bool(props.get("cq:showOnCreate"))
+            or self._as_bool(props.get("showOnCreate"))
+        )
+        hide_on_edit = (
+            self._as_bool(props.get("cq:hideOnEdit"))
+            or self._as_bool(props.get("hideOnEdit"))
         )
         record = {
             "name": name,
@@ -574,10 +590,15 @@ class AEMClient:
             "resourceType": rt,
             "path": node.get("path"),
             "tab": tab_context,
-            "required": str(props.get("required", "")).lower() in ("true", "true"),
+            "required": self._as_bool(props.get("required")),
             "hidden": hidden,
             "readOnly": read_only,
             "disabled": disabled,
+            "renderReadOnly": self._as_bool(props.get("renderReadOnly")),
+            "showOnCreate": show_on_create,
+            "hideOnEdit": hide_on_edit,
+            "cq:hideOnEdit": hide_on_edit,
+            "cq:showOnCreate": show_on_create,
             "properties": {
                 k: v for k, v in props.items()
                 if k not in ("name", "fieldLabel", "jcr:title", "title", "text",
@@ -830,23 +851,186 @@ class AEMClient:
 
 
 
-    def _is_authorable_field(self, field: dict) -> bool:
+    def _as_bool(self, value) -> bool:
+        """Parse AEM/Java-style booleans dynamically."""
+        if value is True:
+            return True
+        if value is False or value is None:
+            return False
+        s = str(value).strip().lower()
+        return s in ("true", "{boolean}true", "1", "yes")
+
+    def _is_authorable_field(self, field: dict, editing_existing: bool = True) -> bool:
         """
-        Dynamic check — do not hardcode field names.
-        Exclude hidden/disabled/readOnly and empty names.
+        Dynamic check — NEVER hardcode field names.
+
+        AEM dialog visibility (from foundation page dialog patterns):
+          cq:hideOnEdit = true  → hide when editing existing content
+              (e.g. pagename / Name — create only)
+          cq:showOnCreate = true WITHOUT hideOnEdit → field still appears on edit
+              (e.g. pagetitle / Page Title — must NOT be dropped)
+          renderReadOnly = true → still shown in dialog (may display read-only);
+              do NOT drop from discovery
+
+        Rule for edit context: drop only if hidden, disabled, or cq:hideOnEdit.
         """
         if not field:
             return False
         name = (field.get("name") or "").strip()
         if not name:
             return False
-        if field.get("hidden"):
+        if "@TypeHint" in name or name.endswith("@TypeHint"):
             return False
-        if field.get("disabled") or field.get("readOnly"):
+        if self._as_bool(field.get("hidden")):
             return False
-        # cq:template etc. technical props sometimes leak — skip names starting with cq: that are not common authorable
-        # Keep jcr:title, jcr:description as they are authorable
+        if self._as_bool(field.get("disabled")):
+            return False
+        # ONLY hideOnEdit removes field while editing — not showOnCreate alone
+        if editing_existing:
+            if self._as_bool(field.get("hideOnEdit")) or self._as_bool(field.get("cq:hideOnEdit")):
+                return False
         return True
+
+
+    def validate_properties_for_update(
+        self,
+        component_path: str,
+        properties: dict,
+        editing_existing: bool = True,
+    ) -> dict:
+        """
+        Field validation for every proposed update (UI or Excel bulk).
+
+        Dynamic rules — no hardcoded field/component names:
+          1. Field must exist on the effective dialog (storage name).
+          2. Field must pass authorable checks (not hidden/disabled/cq:hideOnEdit).
+          3. Unchanged values are reported as skipped (not errors).
+
+        Returns:
+          {
+            status, allowed: {name: value}, rejected: [{name, reason}],
+            skipped: [{name, reason}], allowed_names: [...]
+          }
+        """
+        if not properties:
+            return {
+                "status": "error",
+                "message": "No properties provided",
+                "allowed": {},
+                "rejected": [],
+                "skipped": [],
+                "allowed_names": [],
+            }
+
+        current = self.get_component_fields(component_path)
+        if current.get("status") != "success":
+            return {
+                "status": "error",
+                "message": current.get("message") or "Could not read component/dialog",
+                "allowed": {},
+                "rejected": [],
+                "skipped": [],
+                "allowed_names": [],
+            }
+
+        field_meta = current.get("field_meta") or {}
+        old_fields = current.get("fields") or {}
+
+        # Build allow map from dialog field_meta + fields (authorable only)
+        allow_map = {}  # lower -> canonical name
+        meta_by_name = {}
+        for name, meta in field_meta.items():
+            if not name:
+                continue
+            if isinstance(meta, dict) and not self._is_authorable_field(meta, editing_existing):
+                continue
+            allow_map[str(name).lower()] = str(name)
+            meta_by_name[str(name)] = meta if isinstance(meta, dict) else {}
+            if isinstance(meta, dict):
+                for key in ("storageName", "fileReferenceParameter", "name"):
+                    v = meta.get(key)
+                    if v:
+                        allow_map[str(v).lower()] = str(v)
+                        meta_by_name[str(v)] = meta
+
+        for name in old_fields.keys():
+            if not name:
+                continue
+            meta = field_meta.get(name) or {}
+            if meta and not self._is_authorable_field(meta, editing_existing):
+                continue
+            allow_map[str(name).lower()] = str(name)
+            if name not in meta_by_name:
+                meta_by_name[str(name)] = meta if isinstance(meta, dict) else {}
+
+        allowed = {}
+        rejected = []
+        skipped = []
+
+        def values_equal(a, b):
+            if isinstance(a, (list, dict)) or isinstance(b, (list, dict)):
+                return str(a) == str(b)
+            return str(a if a is not None else "") == str(b if b is not None else "")
+
+        for key, value in properties.items():
+            key_s = str(key)
+            matched = allow_map.get(key_s.lower())
+            if matched is None:
+                rejected.append({
+                    "name": key_s,
+                    "reason": "not_in_effective_dialog",
+                    "message": (
+                        f"Field '{key_s}' is not an authorable field on the effective dialog. "
+                        "It will not be written to the repository."
+                    ),
+                })
+                continue
+
+            meta = meta_by_name.get(matched) or field_meta.get(matched) or {}
+            if meta and not self._is_authorable_field(meta, editing_existing):
+                reason = "not_authorable"
+                if self._as_bool(meta.get("hideOnEdit")) or self._as_bool(meta.get("cq:hideOnEdit")):
+                    reason = "cq_hide_on_edit"
+                elif self._as_bool(meta.get("disabled")):
+                    reason = "disabled"
+                elif self._as_bool(meta.get("hidden")):
+                    reason = "hidden"
+                rejected.append({
+                    "name": key_s,
+                    "mapped_to": matched,
+                    "reason": reason,
+                    "message": f"Field '{matched}' is not editable in the current dialog context ({reason}).",
+                })
+                continue
+
+            if values_equal(old_fields.get(matched), value):
+                skipped.append({
+                    "name": matched,
+                    "reason": "unchanged",
+                    "message": f"Field '{matched}' already has this value.",
+                })
+                continue
+
+            allowed[matched] = value
+
+        status = "success"
+        if rejected and not allowed:
+            status = "error"
+        elif rejected:
+            status = "partial"
+
+        return {
+            "status": status,
+            "component_path": component_path,
+            "resourceType": current.get("resourceType"),
+            "allowed": allowed,
+            "rejected": rejected,
+            "skipped": skipped,
+            "allowed_names": sorted(set(allow_map.values())),
+            "message": (
+                f"Valid: {len(allowed)}, rejected: {len(rejected)}, skipped: {len(skipped)}"
+            ),
+        }
 
     def _merge_tab_fields(self, tabs: list) -> list:
         """
@@ -931,7 +1115,7 @@ class AEMClient:
 
         # Deduplicate by name; MERGE options when the same field appears
         # multiple times (e.g. Title type: datasource select + defaulttypes select)
-        # Skip non-authorable (hidden / disabled / readOnly) dynamically
+        # Skip non-authorable (hidden / disabled / cq:hideOnEdit) dynamically — every field
         seen = {}
         unique_fields = []
         for f in authorable["fields"]:
@@ -1139,6 +1323,51 @@ class AEMClient:
         return storage or "items", values, label
 
 
+
+    def _infer_showhide_group_from_path(self, path: str) -> str | None:
+        """Dynamic: setXxx / showXxx path segments → group name (any project)."""
+        if not path:
+            return None
+        import re
+        m = re.search(r"/set([A-Za-z][A-Za-z0-9]*)/", path)
+        if m:
+            name = m.group(1)
+            return name[0].lower() + name[1:]
+        m = re.search(r"/show([A-Za-z][A-Za-z0-9]*)/", path, re.I)
+        if m:
+            name = m.group(1)
+            return name[0].lower() + name[1:]
+        return None
+
+    def get_allowed_field_names(self, component_path: str) -> dict:
+        """Strict allow-list from effective dialog authorable fields only."""
+        result = self.get_component_fields(component_path)
+        if result.get("status") != "success":
+            return {}
+        allowed = {}
+        for name, meta in (result.get("field_meta") or {}).items():
+            if not name:
+                continue
+            if isinstance(meta, dict) and not self._is_authorable_field(meta):
+                continue
+            allowed[str(name).lower()] = str(name)
+            if isinstance(meta, dict):
+                for key in ("storageName", "fileReferenceParameter", "name"):
+                    v = meta.get(key)
+                    if v:
+                        allowed[str(v).lower()] = str(v)
+        for f in (result.get("fields") or {}):
+            meta = (result.get("field_meta") or {}).get(f)
+            if meta and isinstance(meta, dict) and not self._is_authorable_field(meta):
+                continue
+            if f:
+                allowed[str(f).lower()] = str(f)
+        for mf in result.get("multifields") or []:
+            n = mf.get("name")
+            if n:
+                allowed[str(n).lower()] = str(n)
+        return allowed
+
     def get_component_fields(self, component_path: str) -> dict:
         try:
             url = f"{self.base_url}{component_path}.json"
@@ -1161,6 +1390,8 @@ class AEMClient:
                 for f in dialog_result.get("fields", []):
                     name = f.get("name")
                     if not name:
+                        continue
+                    if not self._is_authorable_field(f):
                         continue
                     if f.get("fileReferenceParameter"):
                         storage = f["fileReferenceParameter"]
@@ -1193,18 +1424,8 @@ class AEMClient:
                         "type": "multifield",
                         "path": mf.get("path"),
                         "itemFields": mf.get("itemFields", []),
-                        "showhideGroup": None
+                        "showhideGroup": self._infer_showhide_group_from_path(mf.get("path") or ""),
                     }
-                    # annotate showhide from path
-                    p = mf.get("path") or ""
-                    if "/setStatic/" in p or "/setstatic/" in p.lower():
-                        field_meta[storage]["showhideGroup"] = "static"
-                    elif "/setChildren/" in p:
-                        field_meta[storage]["showhideGroup"] = "children"
-                    elif "/setSearch/" in p:
-                        field_meta[storage]["showhideGroup"] = "search"
-                    elif "/setTags/" in p:
-                        field_meta[storage]["showhideGroup"] = "tags"
                     # Update multifield entry name/label for frontend
                     mf["name"] = storage
                     mf["label"] = label
@@ -1236,50 +1457,47 @@ class AEMClient:
             if current.get("status") != "success":
                 return {"status": "error", "message": f"Could not read component: {current.get('message')}"}
 
-            # Strict allow-list from effective dialog only (dynamic — any project)
-            allowed = self.get_allowed_field_names(component_path)
-            if not allowed:
-                # fallback to keys from current read
-                allowed = {k.lower(): k for k in (current.get("fields") or {}).keys()}
-
             old_fields = current.get("fields", {})
             field_meta = current.get("field_meta") or {}
-            valid_props = {}
-            rejected = []
 
-            def values_equal(a, b):
-                if isinstance(a, (list, dict)) or isinstance(b, (list, dict)):
-                    return str(a) == str(b)
-                return str(a if a is not None else "") == str(b if b is not None else "")
+            # Central field validation (dialog + cq:hideOnEdit + etc.) — every field
+            validation = self.validate_properties_for_update(
+                component_path, properties, editing_existing=True
+            )
+            valid_props = validation.get("allowed") or {}
+            rejected = validation.get("rejected") or []
+            skipped = validation.get("skipped") or []
 
-            for key, value in properties.items():
-                matched = allowed.get(str(key).lower())
-                if matched is None:
-                    rejected.append(key)
-                    continue
-                if values_equal(old_fields.get(matched), value):
-                    continue
-                valid_props[matched] = value
+            if rejected and not valid_props:
+                return {
+                    "status": "error",
+                    "message": validation.get("message") or "All fields rejected by dialog validation",
+                    "rejected": rejected,
+                    "skipped": skipped,
+                    "allowed_names": validation.get("allowed_names") or [],
+                }
 
             if rejected:
-                sample = list(dict.fromkeys(allowed.values()))[:20]
+                # Refuse partial write of unknown fields — safer for enterprise
                 return {
                     "status": "error",
                     "message": (
-                        f"These fields do not exist in the component dialog and were rejected: "
-                        f"{', '.join(str(x) for x in rejected)}. "
-                        f"Allowed dialog fields: {', '.join(sample)}"
-                        + ("..." if len(allowed) > 20 else "")
+                        "Update blocked: some fields failed dialog validation. "
+                        "Fix or remove rejected fields and retry. "
+                        + validation.get("message", "")
                     ),
                     "rejected": rejected,
-                    "allowed": sample,
+                    "skipped": skipped,
+                    "would_update": list(valid_props.keys()),
+                    "allowed_names": validation.get("allowed_names") or [],
                 }
 
             if not valid_props:
                 return {
                     "status": "success",
                     "message": "No actual changes detected (all values already match)",
-                    "updated_properties": []
+                    "updated_properties": [],
+                    "skipped": skipped,
                 }
 
             url = f"{self.base_url}{component_path}"
@@ -1344,6 +1562,15 @@ class AEMClient:
             db.close()
 
     def get_page_properties_fields(self, page_path: str) -> dict:
-        """Page Properties – same generic engine, includes followed dynamically."""
+        """
+        Page Properties – same generic dialog engine on jcr:content.
+        Includes across Basic/Advanced/... tabs are expanded dynamically.
+        """
         component_path = f"{page_path.rstrip('/')}/jcr:content"
-        return self.get_component_fields(component_path)
+        result = self.get_component_fields(component_path)
+        if result.get("status") != "success":
+            return result
+        # Ensure resourceType is present for debugging
+        result["page_path"] = page_path.rstrip("/")
+        result["is_page_properties"] = True
+        return result
