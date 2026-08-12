@@ -551,6 +551,16 @@ class AEMClient:
         name = self._normalize_name(raw_name)
         rt = node.get("resourceType") or ""
         type_name = rt.split("/")[-1] if rt else "unknown"
+        disabled = str(props.get("disabled", "")).lower() in ("true", "true")
+        read_only = (
+            str(props.get("readOnly", "")).lower() in ("true", "true")
+            or str(props.get("renderReadOnly", "")).lower() in ("true", "true")
+            or disabled
+        )
+        hidden = (
+            str(props.get("hidden", "")).lower() in ("true", "true")
+            or str(props.get("hide", "")).lower() in ("true", "true")
+        )
         record = {
             "name": name,
             "label": (
@@ -565,8 +575,9 @@ class AEMClient:
             "path": node.get("path"),
             "tab": tab_context,
             "required": str(props.get("required", "")).lower() in ("true", "true"),
-            "hidden": str(props.get("hidden", "")).lower() in ("true", "true"),
-            "readOnly": str(props.get("readOnly", "")).lower() in ("true", "true"),
+            "hidden": hidden,
+            "readOnly": read_only,
+            "disabled": disabled,
             "properties": {
                 k: v for k, v in props.items()
                 if k not in ("name", "fieldLabel", "jcr:title", "title", "text",
@@ -818,6 +829,25 @@ class AEMClient:
     # =========================================================================
 
 
+
+    def _is_authorable_field(self, field: dict) -> bool:
+        """
+        Dynamic check — do not hardcode field names.
+        Exclude hidden/disabled/readOnly and empty names.
+        """
+        if not field:
+            return False
+        name = (field.get("name") or "").strip()
+        if not name:
+            return False
+        if field.get("hidden"):
+            return False
+        if field.get("disabled") or field.get("readOnly"):
+            return False
+        # cq:template etc. technical props sometimes leak — skip names starting with cq: that are not common authorable
+        # Keep jcr:title, jcr:description as they are authorable
+        return True
+
     def _merge_tab_fields(self, tabs: list) -> list:
         """
         Do NOT merge tabs together.
@@ -836,9 +866,10 @@ class AEMClient:
         seen = {}
         result = []
         for f in fields or []:
+            if not self._is_authorable_field(f):
+                continue
             n = f.get("name")
             if not n:
-                result.append(f)
                 continue
             if n not in seen:
                 # copy so we can mutate options safely
@@ -900,12 +931,14 @@ class AEMClient:
 
         # Deduplicate by name; MERGE options when the same field appears
         # multiple times (e.g. Title type: datasource select + defaulttypes select)
+        # Skip non-authorable (hidden / disabled / readOnly) dynamically
         seen = {}
         unique_fields = []
         for f in authorable["fields"]:
+            if not self._is_authorable_field(f):
+                continue
             n = f.get("name")
             if not n:
-                unique_fields.append(f)
                 continue
             if n not in seen:
                 seen[n] = f
@@ -927,7 +960,6 @@ class AEMClient:
                                 old_opts.append(o)
                                 have.add(o.get("value"))
                         existing["options"] = old_opts
-                # Prefer path that has options for provenance
                 if new_opts and not (existing.get("options")):
                     existing["path"] = f.get("path") or existing.get("path")
 
@@ -1204,27 +1236,43 @@ class AEMClient:
             if current.get("status") != "success":
                 return {"status": "error", "message": f"Could not read component: {current.get('message')}"}
 
-            allowed = {k.lower(): k for k in current.get("fields", {}).keys()}
+            # Strict allow-list from effective dialog only (dynamic — any project)
+            allowed = self.get_allowed_field_names(component_path)
+            if not allowed:
+                # fallback to keys from current read
+                allowed = {k.lower(): k for k in (current.get("fields") or {}).keys()}
+
             old_fields = current.get("fields", {})
+            field_meta = current.get("field_meta") or {}
             valid_props = {}
             rejected = []
 
+            def values_equal(a, b):
+                if isinstance(a, (list, dict)) or isinstance(b, (list, dict)):
+                    return str(a) == str(b)
+                return str(a if a is not None else "") == str(b if b is not None else "")
+
             for key, value in properties.items():
-                matched = allowed.get(key.lower())
+                matched = allowed.get(str(key).lower())
                 if matched is None:
                     rejected.append(key)
-                else:
-                    if str(old_fields.get(matched) or "") != str(value or ""):
-                        valid_props[matched] = value
+                    continue
+                if values_equal(old_fields.get(matched), value):
+                    continue
+                valid_props[matched] = value
 
             if rejected:
+                sample = list(dict.fromkeys(allowed.values()))[:20]
                 return {
                     "status": "error",
                     "message": (
                         f"These fields do not exist in the component dialog and were rejected: "
-                        f"{', '.join(rejected)}. Allowed fields: "
-                        f"{', '.join(list(allowed.values())[:15])}..."
-                    )
+                        f"{', '.join(str(x) for x in rejected)}. "
+                        f"Allowed dialog fields: {', '.join(sample)}"
+                        + ("..." if len(allowed) > 20 else "")
+                    ),
+                    "rejected": rejected,
+                    "allowed": sample,
                 }
 
             if not valid_props:
@@ -1235,7 +1283,28 @@ class AEMClient:
                 }
 
             url = f"{self.base_url}{component_path}"
-            post_data = {f"./{k}": v for k, v in valid_props.items()}
+            # Build Sling POST — support simple values and multifield lists dynamically
+            post_data = []
+            for k, v in valid_props.items():
+                if isinstance(v, list):
+                    # Multifield: send as repeated ./key or composite ./key/itemN/sub
+                    meta = field_meta.get(k) or {}
+                    item_fields = meta.get("itemFields") or []
+                    item_names = [it.get("name") for it in item_fields if it.get("name")]
+                    for i, item in enumerate(v):
+                        if isinstance(item, dict):
+                            for sub_k, sub_v in item.items():
+                                post_data.append((f"./{k}/item{i}/{sub_k}", sub_v))
+                        elif item_names and len(item_names) == 1:
+                            post_data.append((f"./{k}/item{i}/{item_names[0]}", item))
+                        else:
+                            post_data.append((f"./{k}", item))
+                elif isinstance(v, dict):
+                    for sub_k, sub_v in v.items():
+                        post_data.append((f"./{k}/{sub_k}", sub_v))
+                else:
+                    post_data.append((f"./{k}", v if v is not None else ""))
+
             response = self.session.post(url, data=post_data, timeout=self.timeout)
             success = response.status_code in (200, 201)
             message = "Component updated successfully" if success else f"Update failed. Status code: {response.status_code}"

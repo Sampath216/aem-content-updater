@@ -936,3 +936,607 @@ async function applyExcel() {
         console.error("Apply error:", error);
     }
 }
+
+
+// ========== FIELD DICTIONARY + TEMPLATE GENERATOR UI ==========
+
+function ensureToolbarButtons() {
+  let bar = document.getElementById("tool-extra-actions");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "tool-extra-actions";
+    bar.style.cssText = "display:flex; gap:10px; flex-wrap:wrap; margin:12px 0;";
+    const host =
+      document.getElementById("page-path-card") ||
+      document.getElementById("components-card") ||
+      document.querySelector("main") ||
+      document.body;
+    host.parentNode.insertBefore(bar, host.nextSibling);
+  }
+  if (!document.getElementById("btn-open-dictionary")) {
+    const b1 = document.createElement("button");
+    b1.id = "btn-open-dictionary";
+    b1.type = "button";
+    b1.textContent = "Open Dictionary";
+    b1.className = "btn";
+    b1.style.cssText = "padding:8px 14px; border-radius:6px; border:1px solid #cbd5e1; background:#fff; cursor:pointer; font-weight:500;";
+    b1.onclick = openDictionaryModal;
+    bar.appendChild(b1);
+  }
+  if (!document.getElementById("btn-create-template")) {
+    const b2 = document.createElement("button");
+    b2.id = "btn-create-template";
+    b2.type = "button";
+    b2.textContent = "Create Excel Template";
+    b2.className = "btn";
+    b2.style.cssText = "padding:8px 14px; border-radius:6px; border:none; background:#2563eb; color:#fff; cursor:pointer; font-weight:500;";
+    b2.onclick = openTemplateModal;
+    bar.appendChild(b2);
+  }
+}
+
+function ensureModalRoot() {
+  let root = document.getElementById("modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modal-root";
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function closeModal() {
+  const root = document.getElementById("modal-root");
+  if (root) root.innerHTML = "";
+}
+
+function showModalShell(title, bodyHtml, footerHtml) {
+  const root = ensureModalRoot();
+  root.innerHTML = `
+    <div id="modal-backdrop" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:9998;display:flex;align-items:center;justify-content:center;padding:16px;">
+      <div style="background:#fff;border-radius:12px;max-width:960px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.2);">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #e2e8f0;">
+          <h3 style="margin:0;font-size:16px;color:#0f172a;">${title}</h3>
+          <button type="button" onclick="closeModal()" style="border:none;background:transparent;font-size:20px;cursor:pointer;line-height:1;">×</button>
+        </div>
+        <div id="modal-body" style="padding:16px 18px;overflow:auto;flex:1;">${bodyHtml}</div>
+        <div id="modal-footer" style="padding:12px 18px;border-top:1px solid #e2e8f0;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">${footerHtml || ""}</div>
+      </div>
+    </div>`;
+}
+
+// ----- Dictionary -----
+async function openDictionaryModal() {
+  if (!accessToken) {
+    alert("Please login first");
+    return;
+  }
+  showModalShell("Field Dictionary", "<p>Loading...</p>", "");
+  try {
+    const res = await fetch(`${API_BASE}/api/dictionary`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const data = await res.json();
+    if (!res.ok || data.status !== "success") {
+      throw new Error(data.message || data.detail || "Failed to load dictionary");
+    }
+    renderDictionaryUI(data.components || []);
+  } catch (e) {
+    document.getElementById("modal-body").innerHTML = `<p class="message error">${e.message}</p>`;
+  }
+}
+
+function renderDictionaryUI(components) {
+  let html = `
+    <div style="margin:0 0 14px;padding:12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:13px;color:#1e3a5f;line-height:1.5;">
+      <strong>How to add CA labels</strong><br>
+      • <strong>Left column is locked</strong> — dialog field names come from AEM (do not change them).<br>
+      • <strong>Right column</strong> — type names CA uses in Excel, separated by commas.<br>
+      &nbsp;&nbsp;Example: <code>Title, Meta Title, Heading</code><br>
+      • First name is the default Excel column header. Matching is case-insensitive.<br>
+      • Click <strong>Save</strong> on each row you change. Saved labels are used for template generation.
+    </div>
+    <div style="margin-bottom:10px;">
+      <input id="dict-filter" type="text" placeholder="Filter component or field..."
+        style="width:100%;padding:8px 10px;border:1px solid #d0d5dd;border-radius:6px;"
+        oninput="filterDictionaryRows(this.value)">
+    </div>`;
+
+  if (!components.length) {
+    html += `<p>No components in dictionary yet. Load components on a page in the tool — then use Sync, or add manually after catalog save.</p>`;
+  }
+
+  components.forEach((comp, ci) => {
+    html += `
+      <div class="dict-comp" data-comp-idx="${ci}" style="margin-bottom:18px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+        <div style="background:#f8fafc;padding:10px 12px;font-weight:600;font-size:13px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <span>${escapeDict(comp.label || comp.resourceType)}</span>
+          <span style="font-weight:400;color:#64748b;font-size:12px;">${escapeDict(comp.resourceType)}</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="background:#f1f5f9;text-align:left;">
+              <th style="padding:8px 10px;width:28%;">Dialog field (locked)</th>
+              <th style="padding:8px 10px;">CA labels — add usable names with commas</th>
+              <th style="padding:8px 10px;width:90px;"></th>
+            </tr>
+          </thead>
+          <tbody>`;
+    (comp.fields || []).forEach((f, fi) => {
+      const labels = (f.ca_labels || []).join(", ");
+      html += `
+            <tr class="dict-row" data-search="${escapeDict((comp.label + " " + comp.resourceType + " " + f.field_name + " " + labels).toLowerCase())}">
+              <td style="padding:8px 10px;border-top:1px solid #e2e8f0;vertical-align:middle;font-family:ui-monospace,monospace;font-size:12px;">${escapeDict(f.field_name)}</td>
+              <td style="padding:8px 10px;border-top:1px solid #e2e8f0;">
+                <input type="text" class="dict-aliases"
+                  data-rt="${escapeDict(comp.resourceType)}"
+                  data-fn="${escapeDict(f.field_name)}"
+                  value="${escapeDict(labels)}"
+                  style="width:100%;padding:7px 9px;border:1px solid #d0d5dd;border-radius:6px;">
+              </td>
+              <td style="padding:8px 10px;border-top:1px solid #e2e8f0;">
+                <button type="button" onclick="saveDictionaryRow(this)"
+                  style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;">Save</button>
+              </td>
+            </tr>`;
+    });
+    html += `</tbody></table></div>`;
+  });
+
+  document.getElementById("modal-body").innerHTML = html;
+  document.getElementById("modal-footer").innerHTML = `
+    <button type="button" onclick="closeModal()" style="padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">Close</button>
+  `;
+}
+
+function escapeDict(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function filterDictionaryRows(q) {
+  const query = (q || "").toLowerCase().trim();
+  document.querySelectorAll(".dict-row").forEach((row) => {
+    const hay = row.getAttribute("data-search") || "";
+    row.style.display = !query || hay.includes(query) ? "" : "none";
+  });
+}
+
+async function saveDictionaryRow(btn) {
+  const input = btn.closest("tr").querySelector(".dict-aliases");
+  const rt = input.getAttribute("data-rt");
+  const fn = input.getAttribute("data-fn");
+  const ca_labels = input.value.split(",").map((x) => x.trim()).filter(Boolean);
+  btn.textContent = "Saving...";
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE}/api/dictionary/field`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ resourceType: rt, field_name: fn, ca_labels }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.status !== "success") {
+      throw new Error(data.message || data.detail || "Save failed");
+    }
+    btn.textContent = "Saved";
+    setTimeout(() => {
+      btn.textContent = "Save";
+      btn.disabled = false;
+    }, 800);
+  } catch (e) {
+    alert(e.message);
+    btn.textContent = "Save";
+    btn.disabled = false;
+  }
+}
+
+// ----- Template generator -----
+function fieldNameSet(comp) {
+  const names = (comp.fields || []).map((f) => (f.field_name || f.name || "").trim()).filter(Boolean);
+  return names.sort().join("|");
+}
+
+function isPagePropertiesLike(c) {
+  const rt = (c.resourceType || c.resource_type || "").toLowerCase();
+  const lab = (c.label || "").toLowerCase();
+  if (rt === "page_properties") return true;
+  if (lab.includes("page properties") || lab.includes("page properties / seo")) return true;
+  if (rt.endsWith("/structure/page") || rt.includes("/structure/page")) return true;
+  if (rt === "cq:page" || rt.endsWith("/page") && rt.includes("structure")) return true;
+  return false;
+}
+
+function isTechnicalFieldName(fn) {
+  const n = (fn || "").toLowerCase();
+  if (!n) return true;
+  if (n.includes("@typehint")) return true;
+  if (n.startsWith("cq:lastmodified")) return true;
+  if (n === "cq:lastmodifiedby") return true;
+  return false;
+}
+
+function dedupeTemplateComponents(components) {
+  const byRt = {};
+  (components || []).forEach((c) => {
+    const rt = c.resourceType || c.resource_type;
+    if (!rt) return;
+    if (!byRt[rt]) byRt[rt] = c;
+  });
+  let list = Object.values(byRt);
+
+  // Merge ALL page-properties-like entries into one CA-facing item
+  const pageMerged = {
+    resourceType: "page_properties",
+    label: "Page Properties / SEO",
+    fields: [],
+  };
+  const fieldMap = {};
+  list.forEach((c) => {
+    if (!isPagePropertiesLike(c)) return;
+    (c.fields || []).forEach((f) => {
+      const fn = f.field_name || f.name;
+      if (!fn || isTechnicalFieldName(fn)) return;
+      if (!fieldMap[fn]) {
+        fieldMap[fn] = {
+          field_name: fn,
+          ca_labels: f.ca_labels && f.ca_labels.length ? f.ca_labels : [f.preferred || fn],
+        };
+      }
+    });
+  });
+  // Prefer dictionary order-friendly labels for common SEO fields
+  pageMerged.fields = Object.values(fieldMap);
+
+  list = list.filter((c) => !isPagePropertiesLike(c));
+  if (pageMerged.fields.length) {
+    list.unshift(pageMerged);
+  }
+
+  // Same dialog field signature → keep one (prefer non-core)
+  const bySignature = {};
+  list.forEach((c) => {
+    if (c.resourceType === "page_properties") {
+      bySignature["__page_properties__"] = c;
+      return;
+    }
+    const sig = fieldNameSet(c);
+    if (!sig) {
+      bySignature[c.resourceType] = c;
+      return;
+    }
+    if (!bySignature[sig]) {
+      bySignature[sig] = c;
+      return;
+    }
+    const existing = bySignature[sig];
+    const existingIsCore = (existing.resourceType || "").startsWith("core/");
+    const currentIsCore = (c.resourceType || "").startsWith("core/");
+    if (existingIsCore && !currentIsCore) bySignature[sig] = c;
+  });
+
+  const out = Object.values(bySignature);
+  out.sort((a, b) => {
+    const ap = a.resourceType === "page_properties" ? 0 : 1;
+    const bp = b.resourceType === "page_properties" ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return String(a.label || a.resourceType).localeCompare(String(b.label || b.resourceType));
+  });
+  return out;
+}
+
+async function openTemplateModal() {
+  if (!accessToken) {
+    alert("Please login first");
+    return;
+  }
+  showModalShell("Create Excel Template", "<p>Loading components...</p>", "");
+  try {
+    const res = await fetch(`${API_BASE}/api/dictionary`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const data = await res.json();
+    if (!res.ok || data.status !== "success") {
+      throw new Error(data.message || data.detail || "Failed to load components");
+    }
+    let components = data.components || [];
+
+    // Optional catalog merge by resourceType only
+    try {
+      const catRes = await fetch(`${API_BASE}/api/catalog/list`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (catRes.ok) {
+        const cat = await catRes.json();
+        const map = {};
+        components.forEach((c) => { map[c.resourceType] = c; });
+        const raw = cat.components || {};
+        const list = Array.isArray(raw) ? raw : Object.keys(raw).map((rt) => {
+          const entry = raw[rt] || {};
+          const versions = entry.versions || [];
+          const fields = (versions[0] && versions[0].fields) || entry.fields || [];
+          return {
+            resourceType: rt,
+            label: entry.label || rt.split("/").pop(),
+            fields: (Array.isArray(fields) ? fields : []).map((f) =>
+              typeof f === "string"
+                ? { field_name: f, ca_labels: [f] }
+                : { field_name: f.name || f.field_name, ca_labels: [f.label || f.name || f.field_name] }
+            ),
+          };
+        });
+        list.forEach((c) => {
+          if (!c.resourceType) return;
+          if (!map[c.resourceType]) map[c.resourceType] = c;
+        });
+        components = Object.values(map);
+      }
+    } catch (_) { /* catalog optional */ }
+
+    components = dedupeTemplateComponents(components);
+    renderTemplateUI(components);
+  } catch (e) {
+    document.getElementById("modal-body").innerHTML = `<p class="message error">${e.message}</p>`;
+  }
+}
+
+function renderTemplateUI(components) {
+  let html = `
+    <p style="margin:0 0 12px;font-size:13px;color:#64748b;">
+      Select components and fields for the template. Each component appears <strong>once</strong> —
+      use the <strong>Instance</strong> column in Excel when the same component appears multiple times on a page.
+    </p>`;
+
+  if (!components.length) {
+    html += `<p>No components available. Open pages in the tool so components are stored in the dictionary/catalog first.</p>`;
+  }
+
+  components.forEach((comp, ci) => {
+    html += `
+      <div class="tpl-comp" style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:12px;overflow:hidden;">
+        <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f8fafc;cursor:pointer;">
+          <input type="checkbox" class="tpl-comp-check" data-ci="${ci}" onchange="toggleTplComp(${ci}, this.checked)">
+          <strong style="font-size:13px;">${escapeDict(comp.label || comp.resourceType)}</strong>
+          <span style="font-size:11px;color:#64748b;">${escapeDict(comp.resourceType)}</span>
+        </label>
+        <div id="tpl-fields-${ci}" style="display:none;padding:8px 12px 12px;border-top:1px solid #e2e8f0;">
+          <label style="font-size:12px;color:#64748b;display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+            <input type="checkbox" class="tpl-select-all" data-ci="${ci}" onchange="toggleAllTplFields(${ci}, this.checked)" checked>
+            Select all fields
+          </label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px 14px;">`;
+    (comp.fields || []).forEach((f) => {
+      const fn = f.field_name;
+      const lab = (f.ca_labels && f.ca_labels[0]) || fn;
+      html += `
+            <label style="font-size:12px;display:flex;align-items:center;gap:6px;min-width:180px;">
+              <input type="checkbox" class="tpl-field-check" data-ci="${ci}" data-fn="${escapeDict(fn)}" checked
+                onchange="syncSelectAllCheckbox(${ci})">
+              <span title="${escapeDict(fn)}">${escapeDict(lab)}</span>
+            </label>`;
+    });
+    html += `</div></div></div>`;
+  });
+
+  window.__tplComponents = components;
+
+  document.getElementById("modal-body").innerHTML = html;
+  document.getElementById("modal-footer").innerHTML = `
+    <button type="button" onclick="closeModal()" style="padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">Cancel</button>
+    <button type="button" onclick="previewExcelTemplate()" style="padding:8px 14px;border:1px solid #2563eb;border-radius:6px;background:#eff6ff;color:#1d4ed8;cursor:pointer;font-weight:500;">Preview</button>
+    <button type="button" onclick="generateExcelTemplate()" style="padding:8px 16px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;font-weight:500;">Create Template</button>
+  `;
+}
+
+function collectTemplateSelections() {
+  const components = window.__tplComponents || [];
+  const selections = [];
+  document.querySelectorAll(".tpl-comp-check:checked").forEach((cb) => {
+    const ci = parseInt(cb.getAttribute("data-ci"), 10);
+    const comp = components[ci];
+    if (!comp) return;
+    const fields = [];
+    document.querySelectorAll(`.tpl-field-check[data-ci="${ci}"]:checked`).forEach((f) => {
+      fields.push(f.getAttribute("data-fn"));
+    });
+    if (fields.length) {
+      selections.push({
+        resourceType: comp.resourceType,
+        label: comp.label || comp.resourceType,
+        fields,
+      });
+    }
+  });
+  return selections;
+}
+
+function preferredLabelForField(comp, fieldName) {
+  const f = (comp.fields || []).find((x) => x.field_name === fieldName);
+  if (f && f.ca_labels && f.ca_labels.length) return f.ca_labels[0];
+  if (f && f.preferred) return f.preferred;
+  return fieldName;
+}
+
+function previewExcelTemplate() {
+  const selections = collectTemplateSelections();
+  if (!selections.length) {
+    alert("Select at least one component with fields");
+    return;
+  }
+  const components = window.__tplComponents || [];
+
+  // Excel-like preview: sheet tabs + grid
+  let html = `
+    <div style="font-size:13px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
+        <strong>Excel preview</strong>
+        <span style="font-size:12px;color:#64748b;">Same layout as the file you will download</span>
+      </div>
+      <div id="xlsx-preview-tabs" style="display:flex;gap:4px;flex-wrap:wrap;border-bottom:2px solid #e2e8f0;margin-bottom:0;padding-bottom:0;"></div>
+      <div id="xlsx-preview-sheets" style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;overflow:auto;max-height:360px;background:#fff;"></div>
+      <p style="color:#64748b;font-size:12px;margin:10px 0 0;line-height:1.45;">
+        <strong>How to fill:</strong> Checkbox = <code>true</code>/<code>false</code>.
+        Dropdown = option value (e.g. <code>h1</code>).
+        Multifield = items separated by <code>|</code>.
+        Actions = <code>/path::Label | /path2::Label2</code>.
+      </p>
+    </div>`;
+
+  const body = document.getElementById("modal-body");
+  let prev = document.getElementById("tpl-preview-box");
+  if (!prev) {
+    prev = document.createElement("div");
+    prev.id = "tpl-preview-box";
+    prev.style.cssText = "margin-bottom:14px;padding:12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;";
+    body.insertBefore(prev, body.firstChild);
+  }
+  prev.innerHTML = html;
+
+  const tabsEl = prev.querySelector("#xlsx-preview-tabs");
+  const sheetsEl = prev.querySelector("#xlsx-preview-sheets");
+
+  selections.forEach((sel, idx) => {
+    const comp = components.find((c) => c.resourceType === sel.resourceType) || {};
+    const colHeaders = ["Page Path", "Instance"].concat(
+      sel.fields.map((fn) => preferredLabelForField(comp, fn))
+    );
+
+    // Tab button
+    const tabBtn = document.createElement("button");
+    tabBtn.type = "button";
+    tabBtn.textContent = sel.label || sel.resourceType;
+    tabBtn.dataset.sheetIdx = String(idx);
+    tabBtn.style.cssText = `
+      padding:8px 14px;border:none;cursor:pointer;font-size:12px;font-weight:500;
+      background:transparent;color:#64748b;border-bottom:2px solid transparent;margin-bottom:-2px;`;
+    tabsEl.appendChild(tabBtn);
+
+    // Sheet grid
+    const sheet = document.createElement("div");
+    sheet.dataset.sheetIdx = String(idx);
+    sheet.style.display = idx === 0 ? "block" : "none";
+    sheet.style.padding = "0";
+
+    let table = `<table style="border-collapse:collapse;width:max-content;min-width:100%;font-size:12px;">
+      <thead><tr>`;
+    colHeaders.forEach((h) => {
+      table += `<th style="
+        background:#1e3a5f;color:#fff;font-weight:600;text-align:left;
+        padding:8px 12px;border:1px solid #0f2744;white-space:nowrap;position:sticky;top:0;">${escapeDict(h)}</th>`;
+    });
+    table += `</tr></thead><tbody>`;
+
+    // 5 empty data rows like Excel template
+    for (let r = 0; r < 5; r++) {
+      table += `<tr>`;
+      colHeaders.forEach((h, c) => {
+        // Instance only on first empty example row; CA fills 1,2,3... as needed
+        const placeholder = (c === 1 && r === 0) ? "1" : "";
+        table += `<td style="
+          padding:8px 12px;border:1px solid #e2e8f0;min-width:110px;height:32px;
+          background:${r % 2 === 0 ? "#fff" : "#f8fafc"};color:#94a3b8;">${placeholder}</td>`;
+      });
+      table += `</tr>`;
+    }
+    table += `</tbody></table>`;
+    sheet.innerHTML = table;
+    sheetsEl.appendChild(sheet);
+
+    tabBtn.onclick = () => {
+      tabsEl.querySelectorAll("button").forEach((b) => {
+        b.style.color = "#64748b";
+        b.style.borderBottomColor = "transparent";
+        b.style.fontWeight = "500";
+      });
+      tabBtn.style.color = "#2563eb";
+      tabBtn.style.borderBottomColor = "#2563eb";
+      tabBtn.style.fontWeight = "600";
+      sheetsEl.querySelectorAll("[data-sheet-idx]").forEach((s) => {
+        s.style.display = s.dataset.sheetIdx === String(idx) ? "block" : "none";
+      });
+    };
+
+    if (idx === 0) {
+      tabBtn.style.color = "#2563eb";
+      tabBtn.style.borderBottomColor = "#2563eb";
+      tabBtn.style.fontWeight = "600";
+    }
+  });
+
+  prev.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+
+function toggleTplComp(ci, on) {
+  const panel = document.getElementById(`tpl-fields-${ci}`);
+  if (panel) panel.style.display = on ? "block" : "none";
+}
+
+function toggleAllTplFields(ci, on) {
+  document.querySelectorAll(`.tpl-field-check[data-ci="${ci}"]`).forEach((cb) => {
+    cb.checked = on;
+  });
+  const all = document.querySelector(`.tpl-select-all[data-ci="${ci}"]`);
+  if (all) all.checked = on;
+}
+
+function syncSelectAllCheckbox(ci) {
+  const fields = document.querySelectorAll(`.tpl-field-check[data-ci="${ci}"]`);
+  const all = document.querySelector(`.tpl-select-all[data-ci="${ci}"]`);
+  if (!all || !fields.length) return;
+  const checkedCount = Array.from(fields).filter((cb) => cb.checked).length;
+  all.checked = checkedCount === fields.length;
+  all.indeterminate = checkedCount > 0 && checkedCount < fields.length;
+}
+
+async function generateExcelTemplate() {
+  const selections = collectTemplateSelections();
+  if (!selections.length) {
+    alert("Select at least one component with fields. Use Preview first if you want to review.");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/excel/generate-template`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ include_seo: false, selections }),
+    });
+    if (!res.ok) {
+      let msg = "Template generation failed";
+      try {
+        const err = await res.json();
+        msg = err.message || err.detail || msg;
+      } catch (_) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `AEM_Update_Template.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    closeModal();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// Boot extra toolbar when DOM ready
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", ensureToolbarButtons);
+} else {
+  ensureToolbarButtons();
+}

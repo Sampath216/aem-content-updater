@@ -1,0 +1,306 @@
+{
+  "_meta": {
+    "description": "Maps AEM dialog field names to CA-friendly labels for Excel templates and bulk update.",
+    "rules": [
+      "Left side (field_name) must match the dialog field name discovered by the tool.",
+      "Right side (ca_labels) are aliases CA may type in Excel — comma-separated, case-insensitive.",
+      "First ca_label is the preferred Excel column header.",
+      "Never invent field_names not present in the component dialog.",
+      "To add a new component: load it in the tool, copy field names from the UI, add a section below."
+    ]
+  },
+  "page_properties": {
+    "resourceType": "cq:Page/jcr:content",
+    "label": "Page Properties / SEO",
+    "fields": {
+      "jcr:title": [
+        "Title",
+        "Meta Title",
+        "Page Title (jcr:title)",
+        "jcr:title"
+      ],
+      "pageTitle": [
+        "Page Title",
+        "Browser Title",
+        "pageTitle"
+      ],
+      "navTitle": [
+        "Navigation Title",
+        "Nav Title",
+        "navTitle"
+      ],
+      "subtitle": [
+        "Subtitle",
+        "Sub Title"
+      ],
+      "jcr:description": [
+        "Description",
+        "Meta Description",
+        "jcr:description"
+      ],
+      "cq:tags": [
+        "Tags",
+        "Page Tags"
+      ],
+      "hideInNav": [
+        "Hide in Navigation",
+        "Hide In Nav",
+        "hideInNav"
+      ],
+      "onTime": [
+        "On Time",
+        "Publish On"
+      ],
+      "offTime": [
+        "Off Time",
+        "Unpublish On"
+      ],
+      "cq:redirectTarget": [
+        "Redirect",
+        "Redirect Target"
+      ],
+      "cq:canonicalUrl": [
+        "Canonical URL",
+        "Canonical",
+        "cq:canonicalUrl"
+      ],
+      "sling:alias": [
+        "Alias",
+        "Vanity Alias"
+      ]
+    }
+  },
+  "weretail/components/content/heroimage": {
+    "label": "Hero Image",
+    "fields": {
+      "fileReference": [
+        "Image",
+        "File Reference",
+        "Hero Image",
+        "Image Path",
+        "fileReference"
+      ],
+      "heading": [
+        "Heading",
+        "Hero Heading",
+        "Banner Heading"
+      ],
+      "title": [
+        "Title",
+        "Hero Title"
+      ],
+      "buttonLabel": [
+        "Button Label",
+        "CTA Label",
+        "Button Text"
+      ],
+      "buttonLinkTo": [
+        "Button Link",
+        "CTA Link",
+        "Link to",
+        "buttonLinkTo"
+      ],
+      "useFullWidth": [
+        "Full Width",
+        "Use Full Width",
+        "useFullWidth"
+      ]
+    }
+  },
+  "weretail/components/content/title": {
+    "label": "Title",
+    "fields": {
+      "jcr:title": [
+        "Title",
+        "Heading",
+        "Title Text",
+        "jcr:title"
+      ],
+      "type": [
+        "Type / Size",
+        "Heading Level",
+        "Type",
+        "H Tag",
+        "type"
+      ],
+      "linkURL": [
+        "Link",
+        "Title Link",
+        "URL",
+        "linkURL"
+      ]
+    }
+  },
+  "weretail/components/content/teaser": {
+    "label": "Teaser",
+    "fields": {
+      "fileReference": [
+        "Image",
+        "File Reference",
+        "Teaser Image"
+      ],
+      "jcr:title": [
+        "Title",
+        "Teaser Title"
+      ],
+      "jcr:description": [
+        "Description",
+        "Teaser Description"
+      ],
+      "linkURL": [
+        "Link",
+        "Teaser Link"
+      ],
+      "actionsEnabled": [
+        "Enable Call-To-Actions",
+        "Enable CTAs",
+        "actionsEnabled"
+      ],
+      "actions": [
+        "Actions",
+        "CTAs",
+        "Call To Actions"
+      ]
+    }
+  },
+  "weretail/components/content/productgrid": {
+    "label": "Product Grid",
+    "fields": {
+      "listFrom": [
+        "Build List Using",
+        "List From",
+        "listFrom"
+      ],
+      "parentPage": [
+        "Parent Page",
+        "Child Pages Parent"
+      ],
+      "childDepth": [
+        "Child Depth",
+        "Depth"
+      ],
+      "pages": [
+        "Pages",
+        "Fixed List",
+        "Fixed List Pages"
+      ],
+      "query": [
+        "Search Query",
+        "Query"
+      ],
+      "searchIn": [
+        "Search In",
+        "Search Path"
+      ],
+      "tags": [
+        "Tags"
+      ],
+      "tagsMatch": [
+        "Match",
+        "Tags Match",
+        "Any tag",
+        "All tags"
+      ],
+      "orderBy": [
+        "Order By",
+        "orderBy"
+      ],
+      "sortOrder": [
+        "Sort Order",
+        "sortOrder"
+      ],
+      "maxItems": [
+        "Max Items",
+        "Maximum Items",
+        "maxItems"
+      ]
+    }
+  },
+  "core/wcm/components/title/v2/title": {
+    "label": "Title (Core v2)",
+    "fields": {
+      "jcr:title": [
+        "Title",
+        "Heading",
+        "Title Text"
+      ],
+      "type": [
+        "Type / Size",
+        "Heading Level",
+        "Type"
+      ],
+      "linkURL": [
+        "Link",
+        "Title Link",
+        "URL"
+      ]
+    }
+  },
+  "core/wcm/components/teaser/v1/teaser": {
+    "label": "Teaser (Core)",
+    "fields": {
+      "fileReference": [
+        "Image",
+        "File Reference"
+      ],
+      "jcr:title": [
+        "Title"
+      ],
+      "jcr:description": [
+        "Description"
+      ],
+      "linkURL": [
+        "Link"
+      ],
+      "actionsEnabled": [
+        "Enable Call-To-Actions",
+        "Enable CTAs"
+      ],
+      "actions": [
+        "Actions",
+        "CTAs"
+      ]
+    }
+  },
+  "core/wcm/components/list/v2/list": {
+    "label": "List (Core)",
+    "fields": {
+      "listFrom": [
+        "Build List Using",
+        "List From"
+      ],
+      "parentPage": [
+        "Parent Page"
+      ],
+      "childDepth": [
+        "Child Depth"
+      ],
+      "pages": [
+        "Pages",
+        "Fixed List"
+      ],
+      "query": [
+        "Search Query"
+      ],
+      "searchIn": [
+        "Search In"
+      ],
+      "tags": [
+        "Tags"
+      ],
+      "tagsMatch": [
+        "Match",
+        "Tags Match"
+      ],
+      "orderBy": [
+        "Order By"
+      ],
+      "sortOrder": [
+        "Sort Order"
+      ],
+      "maxItems": [
+        "Max Items"
+      ]
+    }
+  }
+}
