@@ -27,8 +27,18 @@ from backend.app.services.dictionary_service import (
     sync_from_catalog_fields,
 )
 from backend.app.services.excel_template_service import generate_template
-
 settings = get_settings()
+from backend.app.services.excel_template_service import generate_template
+from backend.app.services.excel_bulk_service import preview_excel, apply_excel
+from backend.app.services.template_history_service import (
+    list_templates,
+    save_template,
+    get_template,
+    mark_used,
+    delete_template,
+)
+
+
 
 
 
@@ -243,22 +253,12 @@ def generate_excel_template(
 @app.post("/api/excel/preview")
 async def preview_excel_updates(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     if not file.filename.endswith((".xlsx", ".xls")):
         return {"status": "error", "message": "Please upload a valid Excel file (.xlsx)"}
     content = await file.read()
-    processor = ExcelProcessor()
-    result = processor.process(content)
-    if result.get("status") == "error":
-        return result
-    return {
-        "status": "success",
-        "message": "Preview generated successfully",
-        "summary": result["summary"],
-        "seo_updates": result["seo_updates"],
-        "component_updates": result["component_updates"]
-    }
+    return preview_excel(content)
 
 
 
@@ -266,168 +266,15 @@ async def preview_excel_updates(
 @app.post("/api/excel/apply")
 async def apply_excel_updates(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     if not file.filename.endswith((".xlsx", ".xls")):
         return {"status": "error", "message": "Please upload a valid Excel file (.xlsx)"}
     content = await file.read()
-    processor = ExcelProcessor()
-    parsed = processor.process(content)
-    if parsed.get("status") == "error":
-        return parsed
-    aem = AEMClient()
-    results = {
-        "seo_results": [],
-        "component_results": [],
-        "success_count": 0,
-        "error_count": 0,
-        "skipped_count": 0
-    }
-    seen_canonicals = set()
-    for item in parsed["seo_updates"]:
-        page_path = item["page_path"].rstrip("/")
-        component_path = f"{page_path}/jcr:content"
-        props = item["properties"]
-        row_result = {
-            "page_path": page_path,
-            "errors": [],
-            "updated_fields": [],
-            "skipped_fields": []
-        }
-        page_check = aem.get_component_fields(component_path)
-        if page_check.get("status") != "success":
-            row_result["errors"].append(
-                f"Page does not exist or cannot be read: {page_path}")
-            results["seo_results"].append(row_result)
-            results["error_count"] += 1
-            continue
-        current_fields = page_check.get("fields", {})
-        canonical = props.get("cq:canonicalUrl") or props.get("canonicalUrl")
-        if canonical:
-            if canonical in seen_canonicals:
-                row_result["errors"].append(
-                    f"Duplicate Canonical URL found: {canonical}")
-            else:
-                seen_canonicals.add(canonical)
-        valid_props = {}
-        for key, new_value in props.items():
-            matched_key = None
-            for existing in current_fields.keys():
-                if existing.lower() == key.lower():
-                    matched_key = existing
-                    break
-            if matched_key is None:
-                row_result["errors"].append(
-                    f"Field '{key}' does not exist on this page. Available fields: {', '.join(list(current_fields.keys())[:12])}..."
-                )
-                continue
-            old_value = current_fields.get(matched_key)
-            if str(old_value or "") == str(new_value or ""):
-                row_result["skipped_fields"].append(
-                    f"{key} (already has this value)")
-                continue
-            valid_props[matched_key] = new_value
-        update_result = aem.update_component(
-            component_path=component_path,
-            properties=valid_props,
-            performed_by=current_user.full_name or current_user.username
-        )
-        if update_result.get("status") == "success":
-            row_result["updated_fields"] = list(valid_props.keys())
-            row_result["message"] = "Updated successfully"
-            results["success_count"] += 1
-        else:
-            row_result["errors"].append(
-                update_result.get("message", "Update failed"))
-            results["error_count"] += 1
-        results["seo_results"].append(row_result)
-    for item in parsed["component_updates"]:
-        page_path = item["page_path"].rstrip("/")
-        comp_name = item["component_name"]
-        instance = item.get("instance", 1)
-        props = item["properties"]
-        row_result = {
-            "page_path": page_path,
-            "component_name": comp_name,
-            "instance": instance,
-            "errors": [],
-            "updated_fields": [],
-            "skipped_fields": []
-        }
-        find_result = aem.get_components(page_path)
-        target_path = None
-        if find_result.get("status") != "success":
-            row_result["errors"].append(
-                f"Could not read components on page: {page_path}")
-            results["component_results"].append(row_result)
-            results["error_count"] += 1
-            continue
-        matching = []
-        comp_name_lower = comp_name.lower().replace(" ", "").replace("_", "")
-        for comp in find_result.get("components", []):
-            name = comp["resourceType"].split("/")[-1].lower().replace("_", "")
-            if name == comp_name_lower or comp_name_lower in name:
-                matching.append(comp)
-        matching = sorted(matching, key=lambda x: x["path"])
-        instance_idx = instance - 1
-        if instance_idx < 0 or instance_idx >= len(matching):
-            row_result["errors"].append(
-                f"Component '{comp_name}' instance {instance} not found on the page. "
-                f"Found {len(matching)} instance(s)."
-            )
-            results["component_results"].append(row_result)
-            results["error_count"] += 1
-            continue
-        target_path = matching[instance_idx]["path"]
-        row_result["component_path"] = target_path
-        current = aem.get_component_fields(target_path)
-        if current.get("status") != "success":
-            row_result["errors"].append(
-                "Could not read current fields of the component")
-            results["component_results"].append(row_result)
-            results["error_count"] += 1
-            continue
-        current_fields = current.get("fields", {})
-        valid_props = {}
-        for key, new_value in props.items():
-            matched_key = None
-            for existing in current_fields.keys():
-                if existing.lower() == key.lower():
-                    matched_key = existing
-                    break
-            if matched_key is None:
-                matched_key = key
-            old_value = current_fields.get(matched_key)
-            if str(old_value or "") == str(new_value or ""):
-                row_result["skipped_fields"].append(
-                    f"{key} (already has this value)")
-                continue
-            valid_props[matched_key] = new_value
-        if not valid_props:
-            row_result["errors"].append(
-                "No actual changes detected for this component")
-            results["component_results"].append(row_result)
-            results["skipped_count"] += 1
-            continue
-        update_result = aem.update_component(
-            component_path=target_path,
-            properties=valid_props,
-            performed_by=current_user.full_name or current_user.username
-        )
-        if update_result.get("status") == "success":
-            row_result["updated_fields"] = list(valid_props.keys())
-            row_result["message"] = "Updated successfully"
-            results["success_count"] += 1
-        else:
-            row_result["errors"].append(
-                update_result.get("message", "Update failed"))
-            results["error_count"] += 1
-        results["component_results"].append(row_result)
-    return {
-        "status": "success",
-        "message": f"Completed – Success: {results['success_count']}, Errors: {results['error_count']}, Skipped: {results['skipped_count']}",
-        "results": results
-    }
+    return apply_excel(
+        content,
+        performed_by=current_user.full_name or current_user.username,
+    )
 
 
 @app.post("/api/catalog/update-from-page")
@@ -621,6 +468,7 @@ def api_sync_dictionary(payload: dict, current_user: User = Depends(get_current_
 
 
 @app.post("/api/excel/generate-template")
+@app.post("/api/excel/generate-template")
 def api_generate_excel_template(payload: dict, current_user: User = Depends(get_current_user)):
     """
     Body: {
@@ -635,10 +483,43 @@ def api_generate_excel_template(payload: dict, current_user: User = Depends(get_
     include_seo = payload.get("include_seo", True)
     if not selections and not include_seo:
         return {"status": "error", "message": "Select at least one component or SEO"}
+    # --- ADDED CODE START ---
+    name = payload.get("name") or f"Template {datetime.utcnow().strftime('%Y%m%d_%H%M')}"
+    save_template(name, selections, include_seo=include_seo, source="dictionary")
     content = generate_template(selections, include_seo=include_seo)
+    # --- ADDED CODE END ---
     filename = f"AEM_Update_Template_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.xlsx"
     return StreamingResponse(
         io.BytesIO(content),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/api/templates/history")
+def api_list_template_history(current_user: User = Depends(get_current_user)):
+    return {"status": "success", "templates": list_templates()}
+
+
+@app.delete("/api/templates/history/{template_id}")
+def api_delete_template_history(template_id: str, current_user: User = Depends(get_current_user)):
+    return delete_template(template_id)
+
+
+@app.post("/api/templates/history/{template_id}/download")
+def api_download_previous_template(template_id: str, current_user: User = Depends(get_current_user)):
+    tpl = get_template(template_id)
+    if not tpl:
+        return {"status": "error", "message": "Template not found"}
+    mark_used(template_id)
+    selections = tpl.get("selections") or []
+    include_seo = bool(tpl.get("include_seo"))
+    content = generate_template(selections, include_seo=include_seo)
+    filename = f"{(tpl.get('name') or 'AEM_Template').replace(' ', '_')}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+

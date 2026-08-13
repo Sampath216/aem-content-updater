@@ -778,7 +778,11 @@ async function previewExcel() {
             throw new Error(data.message || data.detail || "Preview failed");
         }
 
-        messageEl.textContent = `Preview ready – ${data.summary.total_seo_rows} SEO rows, ${data.summary.total_component_rows} component rows`;
+        const summary = data.summary || {};
+        const seoCount = summary.total_seo_rows ?? (data.seo_updates || []).length;
+        const compCount = summary.total_component_rows ?? (data.component_updates || []).length;
+        messageEl.textContent = `Preview ready – ${seoCount} SEO/page rows, ${compCount} component rows` +
+            (summary.duplicates_removed ? ` (${summary.duplicates_removed} duplicates removed)` : "");
         messageEl.className = "message success";
 
         // Build preview HTML
@@ -788,10 +792,17 @@ async function previewExcel() {
             html += `<h4>SEO / Page Properties (${data.seo_updates.length})</h4>`;
             html += `<div style="max-height:260px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:10px; margin-bottom:15px;">`;
             data.seo_updates.forEach(item => {
+                const hasErr = item.errors && item.errors.length;
                 html += `<div style="margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #f0f0f0;">
-                    <strong>${item.page_path}</strong><br>`;
-                for (const [k, v] of Object.entries(item.properties)) {
+                    <strong>${hasErr ? "⚠️ " : ""}${item.page_path}</strong><br>`;
+                for (const [k, v] of Object.entries(item.properties || {})) {
                     html += `<span style="font-size:12px; color:#555;">${k}: <b>${v}</b></span><br>`;
+                }
+                if (hasErr) {
+                    html += `<span style="color:#c62828;font-size:12px;">${item.errors.join(" | ")}</span><br>`;
+                }
+                if (item.rejected_fields && item.rejected_fields.length) {
+                    html += `<span style="color:#c62828;font-size:12px;">Rejected: ${item.rejected_fields.map(r => r.name || r).join(", ")}</span><br>`;
                 }
                 html += `</div>`;
             });
@@ -1502,6 +1513,10 @@ async function generateExcelTemplate() {
     return;
   }
 
+  const defaultName = "Template " + new Date().toISOString().slice(0, 16).replace("T", " ");
+  const name = prompt("Name this template for reuse later:", defaultName);
+  if (name === null) return; // cancelled
+
   try {
     const res = await fetch(`${API_BASE}/api/excel/generate-template`, {
       method: "POST",
@@ -1509,7 +1524,7 @@ async function generateExcelTemplate() {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ include_seo: false, selections }),
+      body: JSON.stringify({ include_seo: false, selections, name: name || defaultName }),
     });
     if (!res.ok) {
       let msg = "Template generation failed";
@@ -1539,4 +1554,464 @@ if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", ensureToolbarButtons);
 } else {
   ensureToolbarButtons();
+}
+
+
+
+
+// ========== PREVIOUSLY USED TEMPLATES ==========
+
+async function loadPreviousTemplates() {
+  const msg = document.getElementById("catalog-message");
+  const setMsg = (t, ok) => {
+    if (msg) {
+      msg.textContent = t;
+      msg.className = "message " + (ok ? "success" : "error");
+    }
+  };
+
+  try {
+    setMsg("Loading previous templates...", true);
+    const res = await fetch(`${API_BASE}/api/templates/history`, {
+      headers: { "Authorization": `Bearer ${accessToken}` }
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") {
+      throw new Error(data.message || data.detail || "Failed to load templates");
+    }
+
+    const templates = data.templates || [];
+    window.__previousTemplatesCache = {};
+    templates.forEach((t) => { window.__previousTemplatesCache[t.id] = t; });
+    let target = document.getElementById("catalog-list");
+    if (!target) {
+      target = document.createElement("div");
+      target.id = "catalog-list";
+      target.style.cssText = "margin-top:14px;";
+      const anchor = Array.from(document.querySelectorAll("h3,h2")).find(el =>
+        /previous templates|from catalog|template from catalog/i.test(el.textContent || "")
+      );
+      if (anchor && anchor.parentElement) anchor.parentElement.appendChild(target);
+      else document.body.appendChild(target);
+    }
+
+    if (!templates.length) {
+      target.innerHTML = `<p style="color:#64748b;font-size:13px;">
+        No previous templates yet.<br>
+        Use <strong>Create Excel Template</strong> to build a new one — it will appear here for reuse.
+      </p>`;
+      setMsg("No previous templates saved yet.", true);
+      return;
+    }
+
+    let html = `<p style="font-size:13px;color:#64748b;margin-bottom:10px;">
+      Previously used templates (most used first). Select one to download again.
+    </p>`;
+
+    templates.forEach((t) => {
+      const labels = (t.summary && t.summary.labels) ? t.summary.labels.join(", ") : "";
+      const used = t.use_count || 1;
+      const last = (t.last_used || t.created_at || "").replace("T", " ").slice(0, 19);
+      const safeId = String(t.id || "").replace(/'/g, "");
+      html += `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:8px;background:#f8fafc;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
+        <div style="flex:1;min-width:200px;">
+          <div style="font-weight:600;">${escapeDict(t.name || t.id)}</div>
+          <div style="font-size:12px;color:#64748b;margin-top:4px;">
+            Used <strong>${used}</strong> time(s) · Last: ${escapeDict(last)}
+          </div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:2px;">${escapeDict(labels)}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" onclick="previewPreviousTemplate('${safeId}')"
+            style="padding:8px 12px;background:#fff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:6px;cursor:pointer;font-size:13px;">
+            Preview
+          </button>
+          <button type="button" onclick="editPreviousTemplate('${safeId}')"
+            style="padding:8px 12px;background:#fff;color:#0f766e;border:1px solid #99f6e4;border-radius:6px;cursor:pointer;font-size:13px;">
+            Edit
+          </button>
+          <button type="button" onclick="reusePreviousTemplate('${safeId}')"
+            style="padding:8px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">
+            Generate
+          </button>
+          <button type="button" onclick="deletePreviousTemplate('${safeId}')"
+            style="padding:8px 12px;background:#fff;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-size:13px;">
+            Delete
+          </button>
+        </div>
+      </div>`;
+    });
+
+    target.innerHTML = html;
+    setMsg(`Loaded ${templates.length} previous template(s).`, true);
+  } catch (e) {
+    setMsg(e.message || String(e), false);
+    console.error(e);
+  }
+}
+
+async function reusePreviousTemplate(templateId) {
+  try {
+    const res = await fetch(`${API_BASE}/api/templates/history/${encodeURIComponent(templateId)}/download`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${accessToken}` }
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || err.detail || "Download failed");
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "AEM_Update_Template.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    loadPreviousTemplates();
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}
+
+async function deletePreviousTemplate(templateId) {
+  if (!confirm("Delete this previous template?")) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/templates/history/${encodeURIComponent(templateId)}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${accessToken}` }
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") throw new Error(data.message || "Delete failed");
+    loadPreviousTemplates();
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}
+
+
+window.__previousTemplatesCache = window.__previousTemplatesCache || {};
+
+async function fetchTemplateById(templateId) {
+  // Prefer cache from last list load
+  if (window.__previousTemplatesCache[templateId]) {
+    return window.__previousTemplatesCache[templateId];
+  }
+  const res = await fetch(`${API_BASE}/api/templates/history`, {
+    headers: { "Authorization": `Bearer ${accessToken}` }
+  });
+  const data = await res.json();
+  const templates = data.templates || [];
+  templates.forEach((t) => { window.__previousTemplatesCache[t.id] = t; });
+  return window.__previousTemplatesCache[templateId] || null;
+}
+
+async function previewPreviousTemplate(templateId) {
+  try {
+    const t = await fetchTemplateById(templateId);
+    if (!t) throw new Error("Template not found");
+
+    const selections = t.selections || [];
+    let html = `<div style="font-size:13px;">
+      <div style="margin-bottom:10px;">
+        <strong>${escapeDict(t.name || t.id)}</strong>
+        <div style="color:#64748b;font-size:12px;margin-top:4px;">
+          Used ${t.use_count || 1} time(s)
+          ${t.include_seo ? " · includes Page Properties/SEO" : ""}
+        </div>
+      </div>`;
+
+    if (!selections.length) {
+      html += `<p style="color:#64748b;">No components stored in this template.</p>`;
+    } else {
+      selections.forEach((sel) => {
+        const fields = sel.fields || [];
+        html += `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#f8fafc;">
+          <div style="font-weight:600;">${escapeDict(sel.label || sel.resourceType)}</div>
+          <div style="font-size:12px;color:#94a3b8;margin:2px 0 6px;">${escapeDict(sel.resourceType || "")}</div>
+          <div style="font-size:12px;color:#334155;"><strong>Fields (${fields.length}):</strong> ${escapeDict(fields.join(", "))}</div>
+        </div>`;
+      });
+    }
+    html += `</div>`;
+
+    // Reuse modal if available
+    let modal = document.getElementById("app-modal");
+    if (!modal) {
+      alert("Template: " + (t.name || t.id) + "\n\n" + selections.map(s => (s.label || s.resourceType) + ": " + (s.fields || []).join(", ")).join("\n"));
+      return;
+    }
+    document.getElementById("modal-title").textContent = "Template preview";
+    document.getElementById("modal-body").innerHTML = html;
+    const footer = document.getElementById("modal-footer");
+    if (footer) {
+      footer.innerHTML = `
+        <button type="button" onclick="closeModal()" style="padding:8px 14px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;">Close</button>
+        <button type="button" onclick="closeModal(); editPreviousTemplate('${String(templateId).replace(/'/g, "")}')"
+          style="padding:8px 14px;border:1px solid #99f6e4;border-radius:6px;background:#fff;color:#0f766e;cursor:pointer;">Edit</button>
+        <button type="button" onclick="closeModal(); reusePreviousTemplate('${String(templateId).replace(/'/g, "")}')"
+          style="padding:8px 14px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;">Generate</button>`;
+    }
+    modal.style.display = "flex";
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}
+
+async function editPreviousTemplate(templateId) {
+  try {
+    const t = await fetchTemplateById(templateId);
+    if (!t) throw new Error("Template not found");
+
+    // Open the normal Create Excel Template modal, then pre-select fields from this template
+    if (typeof openTemplateModal === "function") {
+      await openTemplateModal();
+    } else {
+      alert("Create Excel Template UI is not available.");
+      return;
+    }
+
+    // Wait a tick for UI render
+    setTimeout(() => {
+      const selections = t.selections || [];
+      const byRt = {};
+      selections.forEach((s) => { byRt[s.resourceType] = s; });
+
+      document.querySelectorAll(".tpl-comp, [data-resource-type], .tpl-component-block").forEach((box) => {
+        // try several attribute patterns used in template UI
+      });
+
+      // Preferred structure from our template modal: elements with data-rt on component blocks
+      document.querySelectorAll("[data-rt]").forEach((box) => {
+        const rt = box.getAttribute("data-rt");
+        const sel = byRt[rt];
+        if (!sel) return;
+        const fieldsWanted = new Set(sel.fields || []);
+        const compCb = box.querySelector(".tpl-comp-check, .tpl-component-cb, input.tpl-comp-cb");
+        if (compCb) {
+          compCb.checked = true;
+          compCb.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        box.querySelectorAll(".tpl-field-check, .tpl-field-cb").forEach((fcb) => {
+          const val = fcb.value || fcb.getAttribute("data-field") || "";
+          if (fieldsWanted.has(val)) {
+            fcb.checked = true;
+          }
+        });
+      });
+
+      // Also match by resourceType text in dictionary template UI
+      if (window.__tplComponents) {
+        // expand field panels for matching resource types
+        document.querySelectorAll(".tpl-field-check").forEach((fcb) => {
+          const ci = fcb.getAttribute("data-ci");
+          const comps = window.__tplComponents || [];
+          const comp = comps[Number(ci)];
+          if (!comp) return;
+          const sel = byRt[comp.resourceType];
+          if (!sel) return;
+          const fieldsWanted = new Set(sel.fields || []);
+          if (fieldsWanted.has(fcb.value)) {
+            fcb.checked = true;
+            // ensure parent component checked
+            const parentAll = document.querySelector(`.tpl-select-all[data-ci="${ci}"]`);
+            const parentComp = document.querySelector(`.tpl-comp-check[data-ci="${ci}"]`) ||
+              document.querySelector(`input[data-ci="${ci}"].tpl-comp-cb`);
+            // mark component section visible
+            const fieldBox = document.getElementById(`tpl-fields-${ci}`);
+            if (fieldBox) fieldBox.style.display = "block";
+          }
+        });
+        // check component-level checkboxes when any field selected
+        (window.__tplComponents || []).forEach((comp, ci) => {
+          if (!byRt[comp.resourceType]) return;
+          const any = document.querySelector(`.tpl-field-check[data-ci="${ci}"]:checked`);
+          const block = document.querySelector(`[data-ci-block="${ci}"]`) || document.getElementById(`tpl-comp-${ci}`);
+          const enable = document.querySelector(`.tpl-comp-enable[data-ci="${ci}"]`);
+          if (enable) {
+            enable.checked = true;
+            enable.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          const fieldsPanel = document.getElementById(`tpl-fields-${ci}`);
+          if (fieldsPanel) fieldsPanel.style.display = "block";
+          (byRt[comp.resourceType].fields || []).forEach((fn) => {
+            document.querySelectorAll(`.tpl-field-check[data-ci="${ci}"]`).forEach((fcb) => {
+              if (fcb.value === fn) fcb.checked = true;
+            });
+          });
+        });
+      }
+
+      // Store base template id so generate can offer "save as new"
+      window.__editingTemplateId = templateId;
+      window.__editingTemplateName = t.name || "";
+
+      const title = document.getElementById("modal-title");
+      if (title) title.textContent = "Edit template (save as new from Create Template)";
+      alert("Template loaded into the editor. Add/remove components and fields, then click Create Template to save a new template and download.");
+    }, 400);
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}
+
+async function loadComponentCatalog() {
+  return loadPreviousTemplates();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("button").forEach((btn) => {
+    const t = (btn.textContent || "").trim();
+    if (
+      t === "Load Component Catalog" ||
+      t.includes("Load Component Catalog") ||
+      t.includes("Previous Templates") ||
+      t.includes("Load Previous Templates")
+    ) {
+      btn.onclick = function (e) {
+        e.preventDefault();
+        loadPreviousTemplates();
+      };
+      if (t.includes("Load Component Catalog")) {
+        btn.textContent = "Load Previous Templates";
+      }
+    }
+  });
+});
+
+
+// ========== COLLAPSIBLE SECTIONS (enterprise chevron) ==========
+// Only for major page sections — does NOT change component field panels.
+
+function ensureSectionChevron(header) {
+  if (header.querySelector(".section-chevron")) return;
+  const chev = document.createElement("span");
+  chev.className = "section-chevron";
+  chev.setAttribute("aria-hidden", "true");
+  chev.style.cssText = [
+    "margin-left:auto",
+    "display:inline-flex",
+    "align-items:center",
+    "justify-content:center",
+    "width:28px",
+    "height:28px",
+    "border-radius:6px",
+    "background:#f1f5f9",
+    "color:#475569",
+    "font-size:12px",
+    "transition:transform 0.2s ease, background 0.2s ease",
+    "flex-shrink:0",
+  ].join(";");
+  chev.textContent = "▼";
+  header.appendChild(chev);
+}
+
+function setSectionOpen(section, body, open) {
+  body.style.display = open ? "" : "none";
+  section.classList.toggle("is-collapsed", !open);
+  section.classList.toggle("is-expanded", open);
+  const chev = section.querySelector(".section-chevron");
+  if (chev) {
+    chev.textContent = open ? "▼" : "▶";
+    chev.style.transform = open ? "rotate(0deg)" : "rotate(0deg)";
+    chev.style.background = open ? "#e0e7ff" : "#f1f5f9";
+    chev.style.color = open ? "#3730a3" : "#475569";
+  }
+  section.setAttribute("data-section-open", open ? "true" : "false");
+}
+
+function makeSectionCollapsible(section, options = {}) {
+  if (!section || section.dataset.collapsibleBound === "1") return;
+  section.dataset.collapsibleBound = "1";
+
+  // Prefer explicit body; else everything after the first heading
+  let body = section.querySelector(":scope > .section-body, :scope > .card-body, :scope > .collapsible-body");
+  let header = section.querySelector(":scope > .section-header, :scope > .card-header, :scope > .collapsible-header");
+
+  if (!header) {
+    header = section.querySelector(":scope > h2, :scope > h3, :scope > h4");
+  }
+  if (!header) return;
+
+  if (!body) {
+    body = document.createElement("div");
+    body.className = "section-body collapsible-body";
+    const toMove = [];
+    let afterHeader = false;
+    Array.from(section.childNodes).forEach((node) => {
+      if (node === header) {
+        afterHeader = true;
+        return;
+      }
+      if (afterHeader) toMove.push(node);
+    });
+    toMove.forEach((n) => body.appendChild(n));
+    section.appendChild(body);
+  }
+
+  // Header layout for chevron
+  if (getComputedStyle(header).display !== "flex") {
+    header.style.display = "flex";
+    header.style.alignItems = "center";
+    header.style.gap = "10px";
+    header.style.flexWrap = "wrap";
+  }
+  header.style.cursor = "pointer";
+  header.style.userSelect = "none";
+  ensureSectionChevron(header);
+
+  const startOpen = options.defaultOpen !== false;
+  setSectionOpen(section, body, startOpen);
+
+  header.addEventListener("click", (e) => {
+    // Don't toggle when clicking real controls inside header
+    if (e.target.closest("button, a, input, select, textarea, label")) return;
+    const open = section.getAttribute("data-section-open") === "true";
+    setSectionOpen(section, body, !open);
+  });
+}
+
+function initCollapsibleSections() {
+  const candidates = new Set();
+
+  // Explicit class
+  document.querySelectorAll(".collapsible-section, [data-collapsible='true']").forEach((el) => candidates.add(el));
+
+  // Common card wrappers under app
+  const app = document.getElementById("app-section");
+  if (app) {
+    app.querySelectorAll(":scope > .card, :scope > section, :scope > .panel").forEach((el) => candidates.add(el));
+  }
+
+  // Heuristic: section that contains Previous Templates / Bulk Update / Dictionary tools
+  document.querySelectorAll("div, section").forEach((el) => {
+    const h = el.querySelector(":scope > h2, :scope > h3");
+    if (!h) return;
+    const t = (h.textContent || "").toLowerCase();
+    if (
+      t.includes("previous template") ||
+      t.includes("from catalog") ||
+      t.includes("bulk update") ||
+      t.includes("excel template") ||
+      t.includes("dictionary") ||
+      t.includes("create excel")
+    ) {
+      // only direct section containers, not nested tiny divs
+      if (el.children.length >= 2) candidates.add(el);
+    }
+  });
+
+  candidates.forEach((section) => {
+    // Skip login / tiny
+    if (section.id === "login-section") return;
+    if (section.querySelector(".component-item")) return; // don't wrap component list card oddly - still ok to collapse whole card
+    makeSectionCollapsible(section, { defaultOpen: true });
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initCollapsibleSections);
+} else {
+  setTimeout(initCollapsibleSections, 0);
 }

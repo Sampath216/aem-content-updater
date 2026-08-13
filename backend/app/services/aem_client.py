@@ -892,6 +892,53 @@ class AEMClient:
         return True
 
 
+
+    def normalize_field_value(self, meta: dict, value):
+        """
+        Dynamic value normalization from dialog metadata (no hardcoded field names).
+        - booleans: true/false/yes/no/1/0
+        - select/radio: match option value or label case-insensitively → canonical option value
+        """
+        if value is None:
+            return value
+        if isinstance(value, (list, dict)):
+            return value
+
+        s = str(value).strip()
+        ftype = (meta.get("type") or "").lower() if meta else ""
+
+        # Boolean-like
+        if ftype in ("checkbox", "boolean", "switch") or s.lower() in (
+            "true", "false", "yes", "no", "1", "0"
+        ):
+            if ftype in ("checkbox", "boolean", "switch") or (
+                meta and "checkbox" in str(meta.get("resourceType") or "").lower()
+            ):
+                return "true" if s.lower() in ("true", "yes", "1") else "false"
+
+        # Select / radio options from dialog
+        opts = (meta or {}).get("options") or []
+        if opts and s:
+            # exact value
+            for o in opts:
+                if str(o.get("value", "")) == s:
+                    return o.get("value")
+            # case-insensitive value
+            for o in opts:
+                if str(o.get("value", "")).lower() == s.lower():
+                    return o.get("value")
+            # match label (e.g. H1 → h1)
+            for o in opts:
+                lab = str(o.get("label") or o.get("text") or "")
+                if lab.lower() == s.lower():
+                    return o.get("value")
+            # strip spaces
+            for o in opts:
+                if str(o.get("value", "")).lower().replace(" ", "") == s.lower().replace(" ", ""):
+                    return o.get("value")
+
+        return value
+
     def validate_properties_for_update(
         self,
         component_path: str,
@@ -1002,6 +1049,9 @@ class AEMClient:
                     "message": f"Field '{matched}' is not editable in the current dialog context ({reason}).",
                 })
                 continue
+
+            # Normalize against dialog options / boolean widgets
+            value = self.normalize_field_value(meta if isinstance(meta, dict) else {}, value)
 
             if values_equal(old_fields.get(matched), value):
                 skipped.append({
@@ -1477,27 +1527,18 @@ class AEMClient:
                     "allowed_names": validation.get("allowed_names") or [],
                 }
 
-            if rejected:
-                # Refuse partial write of unknown fields — safer for enterprise
-                return {
-                    "status": "error",
-                    "message": (
-                        "Update blocked: some fields failed dialog validation. "
-                        "Fix or remove rejected fields and retry. "
-                        + validation.get("message", "")
-                    ),
-                    "rejected": rejected,
-                    "skipped": skipped,
-                    "would_update": list(valid_props.keys()),
-                    "allowed_names": validation.get("allowed_names") or [],
-                }
-
+            # Apply all VALID dialog fields; report rejected separately (do not block good updates)
             if not valid_props:
                 return {
-                    "status": "success",
-                    "message": "No actual changes detected (all values already match)",
+                    "status": "success" if not rejected else "error",
+                    "message": (
+                        "No actual changes detected (all values already match)"
+                        if not rejected
+                        else "No valid fields to update; some fields were rejected"
+                    ),
                     "updated_properties": [],
                     "skipped": skipped,
+                    "rejected": rejected,
                 }
 
             url = f"{self.base_url}{component_path}"
@@ -1542,13 +1583,18 @@ class AEMClient:
             db.commit()
 
             if success:
-                return {
-                    "status": "success",
+                out = {
+                    "status": "success" if not rejected else "partial",
                     "message": message,
                     "component_path": component_path,
                     "updated_properties": list(valid_props.keys()),
-                    "status_code": response.status_code
+                    "status_code": response.status_code,
+                    "skipped": skipped,
                 }
+                if rejected:
+                    out["rejected"] = rejected
+                    out["message"] = message + f" ({len(rejected)} field(s) rejected)"
+                return out
             return {
                 "status": "error",
                 "message": message,

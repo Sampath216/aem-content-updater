@@ -1,0 +1,119 @@
+{
+  "templates": [
+    {
+      "id": "tpl_20260813065241473065",
+      "name": "Template 2026-08-13 06:52",
+      "created_at": "2026-08-13T06:52:41.473006",
+      "last_used": "2026-08-13T06:52:41.473006",
+      "use_count": 1,
+      "include_seo": false,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "page_properties",
+          "label": "Page Properties / SEO",
+          "fields": [
+            "jcr:title",
+            "pageTitle",
+            "navTitle",
+            "jcr:description",
+            "cq:canonicalUrl"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/button",
+          "label": "button",
+          "fields": [
+            "cssClass",
+            "label",
+            "linkTo"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/heroimage",
+          "label": "Hero Image",
+          "fields": [
+            "fileReference",
+            "heading",
+            "title",
+            "buttonLabel",
+            "buttonLinkTo",
+            "useFullWidth"
+          ]
+        }
+      ],
+      "fingerprint": "seo=0|page_properties:cq:canonicalUrl,jcr:description,jcr:title,navTitle,pageTitle|weretail/components/content/button:cssClass,label,linkTo|weretail/components/content/heroimage:buttonLabel,buttonLinkTo,fileReference,heading,title,useFullWidth",
+      "summary": {
+        "component_count": 3,
+        "field_count": 14,
+        "labels": [
+          "Page Properties / SEO",
+          "button",
+          "Hero Image"
+        ]
+      }
+    },
+    {
+      "id": "tpl_20260813064328948955",
+      "name": "Template 2026-08-13 06:43",
+      "created_at": "2026-08-13T06:43:28.948873",
+      "last_used": "2026-08-13T06:43:28.948873",
+      "use_count": 1,
+      "include_seo": false,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "page_properties",
+          "label": "Page Properties / SEO",
+          "fields": [
+            "jcr:title",
+            "pageTitle",
+            "navTitle",
+            "subtitle",
+            "jcr:description",
+            "cq:tags",
+            "hideInNav",
+            "onTime",
+            "offTime",
+            "cq:redirectTarget",
+            "cq:canonicalUrl",
+            "sling:alias",
+            "socialMedia",
+            "variantPath"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/button",
+          "label": "button",
+          "fields": [
+            "cssClass",
+            "label",
+            "linkTo"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/heroimage",
+          "label": "Hero Image",
+          "fields": [
+            "fileReference",
+            "heading",
+            "title",
+            "buttonLabel",
+            "buttonLinkTo",
+            "useFullWidth"
+          ]
+        }
+      ],
+      "fingerprint": "seo=0|page_properties:cq:canonicalUrl,cq:redirectTarget,cq:tags,hideInNav,jcr:description,jcr:title,navTitle,offTime,onTime,pageTitle,sling:alias,socialMedia,subtitle,variantPath|weretail/components/content/button:cssClass,label,linkTo|weretail/components/content/heroimage:buttonLabel,buttonLinkTo,fileReference,heading,title,useFullWidth",
+      "summary": {
+        "component_count": 3,
+        "field_count": 23,
+        "labels": [
+          "Page Properties / SEO",
+          "button",
+          "Hero Image"
+        ]
+      }
+    }
+  ]
+}

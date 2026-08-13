@@ -34,6 +34,7 @@
           Logged in as: <strong id="logged-user"></strong>
           <button onclick="logout()" class="btn small">Logout</button>
         </div>
+        
 
         <!-- PAGE PATH -->
         <div class="card">
@@ -106,6 +107,8 @@
                 <p style="font-size:13px; color:#666; margin-bottom:12px;">
                     Select previously discovered components and generate a clean Excel template with exact dialog field names.
                 </p>
+                <p id="catalog-message" class="message"></p>
+                <div id="catalog-list"></div>
 
                 <button onclick="loadCatalog()" class="btn primary">Load Component Catalog</button>
                 <button onclick="generateTemplateFromCatalog()" class="btn primary" id="generate-template-btn" style="display:none; margin-left:10px; background:#2e7d32;">
@@ -135,7 +138,6 @@
             </div>
       </section>
     </div>
-
     <script src="app.js"></script>
   </body>
 </html>
