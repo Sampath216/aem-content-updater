@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
-from fastapi import Body, Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Request, Body, Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
@@ -42,6 +42,9 @@ from backend.app.services.dictionary_service import (
     upsert_component,
 )
 from backend.app.services.excel_bulk_service import apply_excel, preview_excel, orchestrate_preview, orchestrate_apply
+from backend.app.services.bulk_validation_service import build_validation_report
+from backend.app.services.bulk_session_service import mark_applied, clear_session, get_session
+from backend.app.services.validation_export_service import validation_report_to_xlsx
 from backend.app.services.excel_service import ExcelTemplateService
 from backend.app.services.excel_template_service import generate_template
 from backend.app.services.page_bulk_service import apply_pages, preview_pages
@@ -486,13 +489,20 @@ async def apply_excel_updates(
 
 @app.post("/api/excel/bulk/preview")
 async def excel_bulk_preview(
+    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
     """Full workbook preview: Assets → Pages → Add → Update."""
     if not file.filename.endswith((".xlsx", ".xls")):
         return {"status": "error", "message": "Please upload a valid Excel file (.xlsx)"}
-    return orchestrate_preview(await file.read())
+    sid = request.headers.get("X-Bulk-Session-Id") or ""
+    return orchestrate_preview(
+        await file.read(),
+        username=current_user.username,
+        session_id=sid or None,
+    )
+
 
 
 @app.post("/api/excel/bulk/apply")
@@ -513,6 +523,80 @@ async def excel_bulk_apply(
 # EXCEL BULK — Assets
 # =============================================================================
 
+
+
+@app.post("/api/excel/bulk/validate")
+async def excel_bulk_validate(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Post-apply verification: DAM, pages, components, field values vs Excel."""
+    if not file.filename.endswith((".xlsx", ".xls")):
+        return {"status": "error", "message": "Please upload a valid Excel file (.xlsx)"}
+    return build_validation_report(await file.read())
+
+
+@app.post("/api/excel/bulk/validate/export")
+async def excel_bulk_validate_export(
+    file: UploadFile = File(...),
+    format: str = "xlsx",
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Export validation report.
+    Query/form: format=xlsx|json
+    """
+    if not file.filename.endswith((".xlsx", ".xls")):
+        return {"status": "error", "message": "Please upload a valid Excel file (.xlsx)"}
+    content = await file.read()
+    report = build_validation_report(content)
+    fmt = (format or "xlsx").lower().strip()
+    if fmt == "json":
+        import json
+        raw = json.dumps(report, indent=2, default=str).encode("utf-8")
+        return StreamingResponse(
+            io.BytesIO(raw),
+            media_type="application/json",
+            headers={"Content-Disposition": 'attachment; filename="AEM_Bulk_Validation_Report.json"'},
+        )
+    xlsx = validation_report_to_xlsx(report)
+    return StreamingResponse(
+        io.BytesIO(xlsx),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="AEM_Bulk_Validation_Report.xlsx"'},
+    )
+
+
+@app.post("/api/excel/bulk/session/clear")
+async def excel_bulk_session_clear(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    sid = request.headers.get("X-Bulk-Session-Id") or ""
+    return clear_session(sid or None)
+
+
+@app.post("/api/excel/bulk/session/mark-applied")
+async def excel_bulk_session_mark(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    sid = request.headers.get("X-Bulk-Session-Id") or ""
+    content = await file.read()
+    return mark_applied(sid or None, content, username=current_user.username)
+
+
+@app.get("/api/excel/bulk/session")
+async def excel_bulk_session_get(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    sid = request.headers.get("X-Bulk-Session-Id") or ""
+    s = get_session(sid or None)
+    if not s:
+        return {"status": "empty", "message": "No active bulk session (page reload starts fresh)"}
+    return {"status": "success", "file_hash": s.get("file_hash"), "applied_at": s.get("applied_at")}
 
 @app.post("/api/excel/components-add/preview")
 async def excel_components_add_preview(
@@ -576,20 +660,42 @@ async def excel_assets_apply(
     content = await file.read()
     plan = plan_asset_uploads(content)
     if plan.get("status") != "success":
-        return plan
+        return {**plan, "status": "error"}
     dam = DamService()
     results = []
     for p in plan.get("plans") or []:
         if p.get("errors"):
-            results.append({"row": p.get("excel_row"), "status": "error", "errors": p["errors"]})
+            results.append({
+                "row": p.get("excel_row"),
+                "status": "error",
+                "source_path": p.get("source_path"),
+                "target_path": p.get("target_path"),
+                "errors": p["errors"],
+            })
             continue
         up = dam.upload_from_local(
             page_dam_path=p["target_path"],
             local_page_folder=p["source_path"],
             confirm_create_folders=True,
         )
-        results.append({"row": p.get("excel_row"), "upload": up})
-    return {"status": "success", "message": "Assets apply finished", "results": results}
+        st = up.get("status") or "error"
+        results.append({
+            "row": p.get("excel_row"),
+            "status": st if st in ("success", "partial") else "error",
+            "source_path": p.get("source_path"),
+            "target_path": p.get("target_path"),
+            "mode": up.get("mode") or p.get("mode"),
+            "upload": up,
+        })
+    err_n = sum(1 for r in results if r.get("status") == "error")
+    ok_n = sum(1 for r in results if r.get("status") == "success")
+    overall = "success" if err_n == 0 else ("partial" if ok_n else "error")
+    return {
+        "status": overall,
+        "message": f"Assets apply — ok: {ok_n}, errors: {err_n}",
+        "results": results,
+        "plan_summary": plan.get("summary"),
+    }
 
 
 # =============================================================================

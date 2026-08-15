@@ -453,58 +453,111 @@ class DamService:
 
     def scan_local_page_folder(self, local_page_folder: str) -> dict:
         """
-        Scan local folder:
-          men/
-            Desktop/  (or desktop)
-            Mobile/
-            Tablet/
+        Scan local folder in either mode:
+
+        A) Breakpoint mode (preferred when present):
+             men/Desktop|Mobile|Tablet/*.jpg
+
+        B) Flat mode — files directly under page folder (no breakpoint dirs):
+             men/*.jpg  → upload under DAM page path (no desktop/mobile/tablet)
         """
         root = Path(local_page_folder)
+        if not root.exists():
+            return {
+                "status": "error",
+                "message": f"Local path does not exist: {local_page_folder}",
+                "local_page_folder": local_page_folder,
+                "exists": False,
+            }
         if not root.is_dir():
-            return {"status": "error", "message": f"Local folder not found: {local_page_folder}"}
+            return {
+                "status": "error",
+                "message": f"Local path is not a folder: {local_page_folder}",
+                "local_page_folder": local_page_folder,
+                "exists": True,
+                "is_dir": False,
+            }
 
         found = {bp: [] for bp in BREAKPOINTS}
+        flat_files = []
         unmatched_dirs = []
+        breakpoint_dirs_found = 0
 
         for child in sorted(root.iterdir()):
-            if not child.is_dir():
-                continue
-            key = LOCAL_BREAKPOINT_ALIASES.get(child.name.strip().lower())
-            if not key:
-                unmatched_dirs.append(child.name)
-                continue
-            for f in sorted(child.iterdir()):
-                if f.is_file() and not f.name.startswith("."):
-                    size_b = f.stat().st_size
-                    size_check = self.check_file_size_for_breakpoint(key, size_b, f.name)
-                    found[key].append({
-                        "local_path": str(f.resolve()),
-                        "original_name": f.name,
-                        "dam_name": adobe_asset_name(f.name),
-                        "size_bytes": size_b,
-                        "size_kb": round(size_b / 1024, 1),
-                        "content_type": resolve_mime_type(f.name),
-                        "size_allowed": bool(size_check.get("allowed")),
-                        "size_message": size_check.get("message"),
-                    })
+            if child.is_dir():
+                key = LOCAL_BREAKPOINT_ALIASES.get(child.name.strip().lower())
+                if not key:
+                    unmatched_dirs.append(child.name)
+                    continue
+                breakpoint_dirs_found += 1
+                for f in sorted(child.iterdir()):
+                    if f.is_file() and not f.name.startswith("."):
+                        size_b = f.stat().st_size
+                        size_check = self.check_file_size_for_breakpoint(key, size_b, f.name)
+                        found[key].append({
+                            "local_path": str(f.resolve()),
+                            "original_name": f.name,
+                            "dam_name": adobe_asset_name(f.name),
+                            "size_bytes": size_b,
+                            "size_kb": round(size_b / 1024, 1),
+                            "content_type": resolve_mime_type(f.name),
+                            "size_allowed": bool(size_check.get("allowed")),
+                            "size_message": size_check.get("message"),
+                        })
+            elif child.is_file() and not child.name.startswith("."):
+                size_b = child.stat().st_size
+                # Flat files use desktop size rule as default gate
+                size_check = self.check_file_size_for_breakpoint("desktop", size_b, child.name)
+                flat_files.append({
+                    "local_path": str(child.resolve()),
+                    "original_name": child.name,
+                    "dam_name": adobe_asset_name(child.name),
+                    "size_bytes": size_b,
+                    "size_kb": round(size_b / 1024, 1),
+                    "content_type": resolve_mime_type(child.name),
+                    "size_allowed": bool(size_check.get("allowed")),
+                    "size_message": size_check.get("message"),
+                    "breakpoint": None,
+                })
 
-        total = sum(len(v) for v in found.values())
-        oversized = [
-            item for bp in BREAKPOINTS for item in found[bp] if not item.get("size_allowed")
-        ]
+        bp_total = sum(len(v) for v in found.values())
+        mode = "breakpoints" if breakpoint_dirs_found > 0 else ("flat" if flat_files else "empty")
+
+        if mode == "breakpoints":
+            total = bp_total
+            oversized = [
+                item for bp in BREAKPOINTS for item in found[bp] if not item.get("size_allowed")
+            ]
+            msg = f"Breakpoint mode: {total} file(s) in Desktop/Mobile/Tablet"
+        elif mode == "flat":
+            total = len(flat_files)
+            oversized = [item for item in flat_files if not item.get("size_allowed")]
+            msg = f"Flat mode: {total} file(s) directly under page folder (no breakpoint DAM subfolders)"
+        else:
+            total = 0
+            oversized = []
+            msg = "No asset files found (no breakpoint folders and no files in page folder)"
+
+        status = "success" if total > 0 else "error"
+        if status == "error" and mode == "empty":
+            msg = (
+                f"No assets found under {root}. "
+                "Expected Desktop/Mobile/Tablet subfolders OR files directly in this folder."
+            )
+
         return {
-            "status": "success",
+            "status": status,
+            "exists": True,
             "local_page_folder": str(root.resolve()),
+            "mode": mode,
             "breakpoints": found,
+            "flat_files": flat_files,
             "total_files": total,
             "oversized_count": len(oversized),
             "oversized": oversized,
             "unmatched_dirs": unmatched_dirs,
             "size_rules_kb": SIZE_RECOMMENDED_KB,
-            "message": (
-                f"Found {total} file(s) across breakpoint folders"
-                + (f" — {len(oversized)} over size limit" if oversized else "")
-            ),
+            "message": msg + (f" — {len(oversized)} over size limit" if oversized else ""),
         }
 
 
@@ -682,6 +735,44 @@ class DamService:
                 "attempts": attempts,
             }
 
+
+    def ensure_folder_path(self, dam_path: str, confirm_create: bool = False) -> dict:
+        """Ensure a single DAM folder path exists (no breakpoint children)."""
+        dam_path = normalize_dam_path(dam_path)
+        if self.path_exists(dam_path):
+            return {"status": "success", "path": dam_path, "created": False}
+        if not confirm_create:
+            return {
+                "status": "needs_confirmation",
+                "message": f"DAM path missing: {dam_path}. Set confirm_create_folders=true to create.",
+                "path": dam_path,
+            }
+        # create segments under /content/dam
+        parts = [p for p in dam_path.split("/") if p]
+        if parts[:2] != ["content", "dam"]:
+            return {"status": "error", "message": "Path must be under /content/dam"}
+        cur = ""
+        created = []
+        for p in parts:
+            cur = f"{cur}/{p}"
+            if self.path_exists(cur):
+                continue
+            parent = cur.rsplit("/", 1)[0]
+            name = cur.rsplit("/", 1)[-1]
+            data = {
+                f"{name}/jcr:primaryType": "sling:OrderedFolder",
+                f"{name}/jcr:content/jcr:primaryType": "nt:unstructured",
+                f"{name}/jcr:content/jcr:title": name,
+            }
+            try:
+                r = self.session.post(f"{self.base_url}{parent}", data=data, timeout=self.timeout)
+                if r.status_code not in (200, 201) or not self.path_exists(cur):
+                    return {"status": "error", "message": f"Failed creating {cur}", "status_code": r.status_code}
+                created.append(cur)
+            except Exception as e:
+                return {"status": "error", "message": str(e), "path": cur}
+        return {"status": "success", "path": dam_path, "created": True, "created_paths": created}
+
     def upload_from_local(
         self,
         page_dam_path: str,
@@ -690,67 +781,115 @@ class DamService:
         overwrite: bool = False,
     ) -> dict:
         """
-        Full flow for local testing:
-          1) ensure DAM structure (optional create)
-          2) scan local Desktop/Mobile/Tablet
-          3) upload each file with Adobe naming
+        Upload from local page folder.
+        - Breakpoint mode: ensure desktop/mobile/tablet under DAM page path
+        - Flat mode: ensure only page DAM folder; upload files directly under it
+        Never creates DAM folders if local path is missing / empty.
         """
-        ensure = self.ensure_page_dam_structure(page_dam_path, confirm_create=confirm_create_folders)
-        if ensure.get("status") == "needs_confirmation":
-            return ensure
-        if ensure.get("status") != "success" and not ensure.get("inspection", {}).get("all_ready"):
-            return ensure
-
-        base = normalize_dam_path(page_dam_path)
         scan = self.scan_local_page_folder(local_page_folder)
         if scan.get("status") != "success":
-            return scan
+            return {
+                "status": "error",
+                "message": scan.get("message") or "Local scan failed",
+                "scan": scan,
+            }
+
+        base = normalize_dam_path(page_dam_path)
+        mode = scan.get("mode") or "breakpoints"
+
+        # Folder setup
+        if mode == "flat":
+            # Only ensure page folder path (no breakpoint children)
+            ensure = self.ensure_folder_path(base, confirm_create=confirm_create_folders)
+            if ensure.get("status") == "needs_confirmation":
+                return ensure
+            if ensure.get("status") not in ("success", None) and not self.path_exists(base):
+                # try ensure_page without breakpoints if method differs
+                pass
+        else:
+            ensure = self.ensure_page_dam_structure(page_dam_path, confirm_create=confirm_create_folders)
+            if ensure.get("status") == "needs_confirmation":
+                return ensure
+            if ensure.get("status") != "success" and not ensure.get("inspection", {}).get("all_ready"):
+                if not all(self.path_exists(f"{base}/{bp}") for bp in BREAKPOINTS):
+                    return {
+                        "status": "error",
+                        "message": "DAM breakpoint folders not ready",
+                        "folder_setup": ensure,
+                        "scan": scan,
+                    }
 
         results = []
         success = skipped = errors = rejected_size = 0
-        for bp in BREAKPOINTS:
-            dam_folder = f"{base}/{bp}"
-            for item in scan["breakpoints"].get(bp) or []:
-                # Size gate — never upload oversized assets
-                size_check = self.check_file_size_for_breakpoint(bp, item.get("size_bytes") or 0, item.get("original_name") or item.get("dam_name") or "")
-                if not size_check.get("allowed"):
-                    results.append({
-                        "breakpoint": bp,
-                        "status": "rejected_size",
-                        "local_path": item["local_path"],
-                        "dam_name": item["dam_name"],
-                        "size_kb": size_check.get("size_kb"),
-                        "limit_kb": size_check.get("limit_kb"),
-                        "message": size_check.get("message"),
-                    })
-                    rejected_size += 1
-                    errors += 1
-                    continue
-                if not overwrite and self.path_exists(f"{dam_folder}/{item['dam_name']}"):
-                    results.append({
-                        "breakpoint": bp,
-                        "status": "skipped",
-                        "local_path": item["local_path"],
-                        "dam_name": item["dam_name"],
-                        "message": "Already exists",
-                    })
-                    skipped += 1
-                    continue
-                up = self.upload_file(dam_folder, item["local_path"], item["dam_name"])
-                up["breakpoint"] = bp
-                up["local_path"] = item["local_path"]
-                up["size_kb"] = item.get("size_kb")
-                results.append(up)
-                if up.get("status") == "success":
-                    success += 1
-                elif up.get("status") == "skipped":
-                    skipped += 1
-                else:
-                    errors += 1
+
+        def process_item(item, dam_folder, bp_label):
+            nonlocal success, skipped, errors, rejected_size
+            bp_for_size = bp_label or "desktop"
+            size_check = self.check_file_size_for_breakpoint(
+                bp_for_size,
+                item.get("size_bytes") or 0,
+                item.get("original_name") or item.get("dam_name") or "",
+            )
+            if not size_check.get("allowed"):
+                results.append({
+                    "breakpoint": bp_label,
+                    "status": "rejected_size",
+                    "local_path": item["local_path"],
+                    "dam_name": item["dam_name"],
+                    "size_kb": size_check.get("size_kb"),
+                    "limit_kb": size_check.get("limit_kb"),
+                    "message": size_check.get("message"),
+                })
+                rejected_size += 1
+                errors += 1
+                return
+            target = f"{dam_folder}/{item['dam_name']}"
+            if not overwrite and self.path_exists(target):
+                results.append({
+                    "breakpoint": bp_label,
+                    "status": "skipped",
+                    "local_path": item["local_path"],
+                    "dam_name": item["dam_name"],
+                    "dam_path": target,
+                    "message": "Already exists",
+                })
+                skipped += 1
+                return
+            up = self.upload_file(dam_folder, item["local_path"], item["dam_name"])
+            up["breakpoint"] = bp_label
+            up["local_path"] = item["local_path"]
+            up["size_kb"] = item.get("size_kb")
+            results.append(up)
+            if up.get("status") == "success":
+                success += 1
+            elif up.get("status") == "skipped":
+                skipped += 1
+            else:
+                errors += 1
+
+        if mode == "flat":
+            if not self.path_exists(base):
+                # create only the page folder path
+                ensure2 = self.ensure_folder_path(base, confirm_create=True) if confirm_create_folders else None
+                if not self.path_exists(base):
+                    return {
+                        "status": "error",
+                        "message": f"DAM page folder missing and could not create: {base}",
+                        "folder_setup": ensure2,
+                        "scan": scan,
+                    }
+            for item in scan.get("flat_files") or []:
+                process_item(item, base, None)
+        else:
+            for bp in BREAKPOINTS:
+                dam_folder = f"{base}/{bp}"
+                for item in scan.get("breakpoints", {}).get(bp) or []:
+                    process_item(item, dam_folder, bp)
 
         return {
             "status": "success" if errors == 0 else "partial",
             "page_dam_path": base,
+            "mode": mode,
             "local_page_folder": scan.get("local_page_folder"),
             "summary": {
                 "success": success,
@@ -760,7 +899,8 @@ class DamService:
                 "total": success + skipped + errors,
             },
             "size_rules_kb": SIZE_RECOMMENDED_KB,
-            "size_limits_with_tolerance_kb": {k: v / 1024 for k, v in SIZE_LIMITS_BYTES.items()},
-            "folder_setup": ensure,
+            "folder_setup": ensure if mode != "flat" else {"mode": "flat", "path": base},
+            "scan_message": scan.get("message"),
             "results": results,
         }
+

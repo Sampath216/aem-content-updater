@@ -15,6 +15,29 @@ from openpyxl import load_workbook
 from backend.app.services.dictionary_service import load_dictionary, resolve_label
 from backend.app.services.aem_client import AEMClient
 
+def normalize_write_value(field_name: str, value):
+    if value is None:
+        return value
+    s = str(value).strip()
+    fn = (field_name or "").lower().replace(" ", "")
+    truthy = {"y", "yes", "true", "1", "on"}
+    falsy = {"n", "no", "false", "0", "off"}
+    sl = s.lower()
+    if sl in truthy | falsy:
+        if any(h in fn for h in ("fullwidth", "checkbox", "boolean", "enabled", "hide", "openinnew")) or fn in ("usefullwidth",):
+            return "true" if sl in truthy else "false"
+    if fn in ("type", "titletype", "headingtype", "size") or "typesize" in fn:
+        if len(s) >= 2 and s[0].upper() == "H" and s[1:].isdigit():
+            return s.lower()
+    return value
+
+
+def normalize_props(props: dict) -> dict:
+    if not props:
+        return {}
+    return {k: normalize_write_value(str(k), v) for k, v in props.items()}
+
+
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
@@ -358,7 +381,7 @@ def apply_all(parsed: dict, performed_by: str = "system", aem: Optional[AEMClien
             "rejected": [],
             "skipped": [],
         }
-        upd = aem.update_component(target, row.get("properties") or {}, performed_by=performed_by)
+        upd = aem.update_component(target, normalize_props(row.get("properties") or {}), performed_by=performed_by)
         if upd.get("status") in ("success", "partial"):
             row_out["updated_fields"] = upd.get("updated_properties") or []
             row_out["rejected"] = upd.get("rejected") or []
@@ -397,7 +420,7 @@ def apply_all(parsed: dict, performed_by: str = "system", aem: Optional[AEMClien
             results["component_results"].append(row_out)
             continue
         row_out["target_path"] = path
-        upd = aem.update_component(path, row.get("properties") or {}, performed_by=performed_by)
+        upd = aem.update_component(path, normalize_props(row.get("properties") or {}), performed_by=performed_by)
         if upd.get("status") in ("success", "partial"):
             row_out["updated_fields"] = upd.get("updated_properties") or []
             row_out["rejected"] = upd.get("rejected") or []
@@ -658,7 +681,18 @@ def parse_add_sheets(content: bytes) -> dict:
                                     break
                         if resolved:
                             break
-                header_map[idx] = resolved or h
+                resolved = resolved or h
+                # Common CA labels for image fields
+                rl = _norm(str(resolved))
+                if rl in ("image", "file", "file reference", "asset", "hero image"):
+                    resolved = "fileReference"
+                elif rl in ("full width", "usefullwidth"):
+                    resolved = "useFullWidth"
+                elif rl in ("button label", "buttonlabel"):
+                    resolved = "buttonLabel"
+                elif rl in ("button link", "buttonlink", "button link to"):
+                    resolved = "buttonLinkTo"
+                header_map[idx] = resolved
 
         for r_i, row in enumerate(data[1:], start=2):
             if not row or all(c is None or str(c).strip() == "" for c in row):
@@ -692,25 +726,294 @@ def parse_add_sheets(content: bytes) -> dict:
     return {"status": "success", "rows": rows, "errors": errors}
 
 
-def orchestrate_preview(content: bytes) -> dict:
+def orchestrate_preview(content: bytes, username: str = None, session_id: str = None) -> dict:
     """
     Preview full bulk workbook in order (no writes).
+    Validates Add-sheet page paths against existing AEM pages + Pages sheet Create=Y.
     """
     from backend.app.services.asset_bulk_service import plan_asset_uploads
     from backend.app.services.page_bulk_service import preview_pages
+    from backend.app.services.page_service import PageService
+    from backend.app.services.component_add_service import ComponentAddService
 
     assets = plan_asset_uploads(content)
     pages = preview_pages(content)
     adds = parse_add_sheets(content)
     updates = preview_excel(content)
 
+    ps = PageService()
+    add_svc = ComponentAddService()
+
+    # Paths that will exist after Pages step
+    will_exist = set()
+    for plan in pages.get("plans") or []:
+        p = plan.get("page_path")
+        if not p:
+            continue
+        if plan.get("action") in ("create_page", "exists"):
+            will_exist.add(p.rstrip("/"))
+        if plan.get("action") == "exists":
+            will_exist.add(p.rstrip("/"))
+
+    # Also any path that already exists in AEM
+    validated_rows = []
+    add_errors = list(adds.get("errors") or [])
+    add_warnings = []
+    for row in adds.get("rows") or []:
+        entry = dict(row)
+        entry["errors"] = []
+        entry["warnings"] = []
+        page_path = (row.get("page_path") or "").rstrip("/")
+        exists_now = False
+        try:
+            exists_now = ps.path_exists(page_path)
+        except Exception:
+            exists_now = False
+        if exists_now:
+            entry["page_status"] = "exists"
+            will_exist.add(page_path)
+        elif page_path in will_exist:
+            entry["page_status"] = "will_create_in_batch"
+            entry["warnings"].append("Page will be created in Pages step of this same bulk run")
+        else:
+            entry["page_status"] = "missing"
+            entry["errors"].append(
+                f"Page path not found and not scheduled for create in Pages sheet: {page_path}"
+            )
+            add_errors.append(f"{row.get('sheet')} row {row.get('excel_row')}: page missing: {page_path}")
+
+        # Resolve component name
+        comp = row.get("component") or ""
+        res = add_svc.resolve_resource_type(comp, page_path if exists_now else None)
+        if res.get("status") != "success":
+            entry["errors"].append(res.get("message") or f"Cannot resolve component '{comp}'")
+            add_errors.append(
+                f"{row.get('sheet')} row {row.get('excel_row')}: cannot resolve '{comp}'"
+            )
+        else:
+            entry["resourceType"] = res.get("resourceType")
+            entry["resolved_by"] = res.get("matched_by")
+            # Allowed check when page exists
+            if exists_now or page_path in will_exist:
+                try:
+                    allowed = add_svc.get_allowed_components(page_path if exists_now else page_path)
+                    allowed_set = set(allowed.get("allowed_resource_types") or [])
+                    rt = res.get("resourceType") or ""
+                    if allowed_set and rt not in allowed_set:
+                        leaf = rt.split("/")[-1]
+                        if not any(leaf == a.split("/")[-1] for a in allowed_set):
+                            entry["warnings"].append(
+                                f"Component may not be in allowed list for this layout ({rt})"
+                            )
+                            add_warnings.append(entry["warnings"][-1])
+                except Exception:
+                    pass
+
+        # Empty properties warning
+        if not (row.get("properties") or {}):
+            entry["warnings"].append("No field values provided — component will be added with defaults only")
+
+        validated_rows.append(entry)
+
+    blocked = sum(1 for r in validated_rows if r.get("errors"))
+    ok = sum(1 for r in validated_rows if not r.get("errors"))
+
+
+    # --- Recommendations: page paths vs DAM asset targets (not hard-coded projects) ---
+    recommendations = []
+    page_paths_for_dam = []
+    for plan in pages.get("plans") or []:
+        if plan.get("action") in ("create_page", "exists") and plan.get("page_path"):
+            page_paths_for_dam.append(plan["page_path"].rstrip("/"))
+
+    asset_targets = []
+    for p in assets.get("plans") or []:
+        if p.get("target_path"):
+            asset_targets.append({
+                "target": p["target_path"].rstrip("/"),
+                "source": p.get("source_path"),
+                "row": p.get("excel_row"),
+                "errors": p.get("errors") or [],
+            })
+
+    def suggest_dam_for_page(page_path: str) -> list:
+        """
+        Dynamic suggestions from page path only (no project hardcoding).
+        /content/<site>/.../<page> → /content/dam/<site>/.../<page> variants
+        """
+        parts = [x for x in page_path.split("/") if x]
+        if len(parts) < 2 or parts[0] != "content":
+            return []
+        after = parts[1:]  # site, ...
+        suggestions = []
+        # Full mirror under /content/dam
+        suggestions.append("/content/dam/" + "/".join(after))
+        # Drop locale-ish middle segments if 4+ (keep site + last 2)
+        if len(after) >= 3:
+            suggestions.append("/content/dam/" + "/".join([after[0]] + after[-2:]))
+        if len(after) >= 2:
+            suggestions.append("/content/dam/" + "/".join([after[0], after[-1]]))
+        # unique
+        out = []
+        for s in suggestions:
+            if s not in out:
+                out.append(s)
+        return out
+
+    for pp in page_paths_for_dam:
+        leaf = pp.split("/")[-1]
+        suggestions = suggest_dam_for_page(pp)
+        # Does any asset target equal suggestion or end with /leaf (and look page-specific)?
+        matched = False
+        for at in asset_targets:
+            t = at["target"]
+            if t in suggestions or t.rstrip("/").endswith("/" + leaf):
+                # weak match on leaf only if target deeper than dam root+1
+                if t in suggestions or t.count("/") >= 5:
+                    matched = True
+                    break
+        if not matched and suggestions:
+            recommendations.append({
+                "type": "dam_path_alignment",
+                "severity": "warn",
+                "page_path": pp,
+                "message": (
+                    f"Page '{pp}' has no Assets Target Path that looks aligned. "
+                    f"Recommended DAM folder(s) for this page’s assets: {', '.join(suggestions)}. "
+                    "Update the Assets sheet and re-upload Excel if this page needs its own assets."
+                ),
+                "suggested_dam_paths": suggestions,
+            })
+
+    for at in asset_targets:
+        if at["errors"]:
+            continue
+        t = at["target"]
+        # If target leaf doesn't match any page leaf being created, warn
+        tleaf = t.split("/")[-1]
+        page_leaves = {p.split("/")[-1] for p in page_paths_for_dam}
+        if page_paths_for_dam and tleaf not in page_leaves and tleaf in ("men", "women", "en", "us", "ca"):
+            recommendations.append({
+                "type": "dam_target_generic",
+                "severity": "warn",
+                "excel_row": at["row"],
+                "target_path": t,
+                "message": (
+                    f"Assets row {at['row']} targets '{t}' which looks like a parent/section folder, "
+                    f"while Pages create: {', '.join(page_paths_for_dam)}. "
+                    "For page-specific assets, Target Path usually ends with the page name "
+                    "(e.g. .../men/test or .../men/test/test-1)."
+                ),
+            })
+
+    # Any component field that points at DAM (image, pdf, video, json, etc.) — dynamic
+    # Detection is primarily by VALUE (/content/dam/...), not by component type.
+    ASSET_FIELD_HINTS = (
+        "image", "file", "asset", "thumbnail", "poster", "video", "pdf",
+        "document", "json", "media", "attachment", "download", "fileref",
+        "filereference", "file reference", "dam", "rendition",
+    )
+
+    def looks_like_dam_path(val: str) -> bool:
+        v = (val or "").strip().replace("\\", "/")
+        return v.startswith("/content/dam/") or v.startswith("content/dam/")
+
+    def is_likely_asset_field(name: str) -> bool:
+        n = _norm(name or "")
+        if not n:
+            return False
+        for h in ASSET_FIELD_HINTS:
+            if h in n:
+                return True
+        return False
+
+    # Map page -> list of asset targets from Excel for that page leaf
+    targets_by_leaf = {}
+    for at in asset_targets:
+        leaf = at["target"].split("/")[-1]
+        targets_by_leaf.setdefault(leaf, []).append(at["target"])
+
+    for row in validated_rows:
+        page_path = (row.get("page_path") or "").rstrip("/")
+        page_leaf = page_path.split("/")[-1] if page_path else ""
+        props = row.get("properties") or {}
+        suggested = suggest_dam_for_page(page_path) if page_path else []
+        page_targets = targets_by_leaf.get(page_leaf) or []
+        for fk, fval in props.items():
+            aval = str(fval or "").strip()
+            if not aval:
+                continue
+            # Dynamic: any DAM path value, on any component — not Hero-only
+            if not looks_like_dam_path(aval) and not is_likely_asset_field(str(fk)):
+                continue
+            if not looks_like_dam_path(aval):
+                continue
+            if not aval.startswith("/"):
+                aval = "/" + aval
+            aligned = False
+            # Align if asset path is under suggested DAM or under any Assets target for this page leaf
+            for s in suggested:
+                if aval == s or aval.startswith(s.rstrip("/") + "/"):
+                    aligned = True
+                    break
+            if not aligned:
+                for t in page_targets:
+                    if aval == t or aval.startswith(t.rstrip("/") + "/"):
+                        aligned = True
+                        break
+            if not aligned:
+                # also OK if aval contains page leaf as path segment
+                if f"/{page_leaf}/" in aval or aval.endswith("/" + page_leaf):
+                    aligned = True
+            if not aligned:
+                msg = (
+                    f"Component '{row.get('component')}' on page '{page_path}' uses asset path "
+                    f"'{aval}' which does not align with recommended DAM folder(s) for this page"
+                )
+                if suggested:
+                    msg += f": {', '.join(suggested)}"
+                msg += ". Update this DAM path in the Add sheet to match the Assets Target Path for this page (project recommendation). Applies to any asset field: image, PDF, video, JSON, etc."
+                recommendations.append({
+                    "type": "component_asset_alignment",
+                    "severity": "warn",
+                    "page_path": page_path,
+                    "component": row.get("component"),
+                    "field": fk,
+                    "asset_path": aval,
+                    "suggested_dam_paths": suggested,
+                    "excel_row": row.get("excel_row"),
+                    "sheet": row.get("sheet"),
+                    "message": msg,
+                })
+                row.setdefault("warnings", []).append(msg)
+
+    session_delta = None
+    try:
+        from backend.app.services.bulk_session_service import diff_against_session
+        if session_id:
+            session_delta = diff_against_session(session_id, content)
+    except Exception as e:
+        session_delta = {"status": "error", "message": str(e)}
+
     return {
         "status": "success",
         "message": "Full bulk preview (Assets → Pages → Add → Update)",
         "assets": assets,
         "pages": pages,
-        "components_add": adds,
+        "components_add": {
+            "status": "success" if blocked == 0 else "partial",
+            "rows": validated_rows,
+            "errors": add_errors,
+            "warnings": add_warnings,
+            "summary": {
+                "total": len(validated_rows),
+                "ok": ok,
+                "blocked": blocked,
+            },
+        },
         "updates": updates,
+        "recommendations": recommendations,
+        "session_delta": session_delta,
     }
 
 

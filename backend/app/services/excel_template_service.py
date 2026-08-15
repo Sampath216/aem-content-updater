@@ -270,20 +270,23 @@ def generate_template(
                 ws.cell(2, c).font = example_font
 
     # 6. Component UPDATE sheets
-    for sel in selections:
-        if not isinstance(sel, dict):
-            continue
-        rt = sel.get("resourceType") or ""
-        if rt == "page_properties" or "page properties" in (sel.get("label") or "").lower():
-            continue
-        label = str(sel.get("label") or (rt.split("/")[-1] if rt else "Component"))[:28]
-        ws = wb.create_sheet(_unique_sheet_name(wb, label))
-        fields = sel.get("fields") or []
-        headers = ["Page Path", "Instance"]
-        for fn in fields:
-            headers.append(_field_header(data, rt, str(fn)))
-        _style_header(ws, headers, header_fill, header_font, thin)
-        _empty_rows(ws, headers, thin, 6)
+    # Update sheets (Instance column): only for "update existing" workbooks.
+    # New-page flow (Pages + Add checked): components are Add-only — no Instance sheets.
+    if not (include_pages and include_components_add):
+        for sel in selections:
+            if not isinstance(sel, dict):
+                continue
+            rt = sel.get("resourceType") or ""
+            if rt == "page_properties" or "page properties" in (sel.get("label") or "").lower():
+                continue
+            label = str(sel.get("label") or (rt.split("/")[-1] if rt else "Component"))[:28]
+            ws = wb.create_sheet(_unique_sheet_name(wb, label))
+            fields = sel.get("fields") or []
+            headers = ["Page Path", "Instance"]
+            for fn in fields:
+                headers.append(_field_header(data, rt, str(fn)))
+            _style_header(ws, headers, header_fill, header_font, thin)
+            _empty_rows(ws, headers, thin, 6)
 
     buf = io.BytesIO()
     wb.save(buf)

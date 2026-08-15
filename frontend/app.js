@@ -1,6 +1,64 @@
 // Configuration
 const API_BASE = "http://127.0.0.1:8001";
 
+// New page load / refresh always starts a fresh bulk session (not stored in localStorage)
+function newBulkSessionId() {
+  return "bs-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+let bulkSessionId = newBulkSessionId();
+
+function bulkSessionHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  h["X-Bulk-Session-Id"] = bulkSessionId;
+  if (typeof accessToken !== "undefined" && accessToken) {
+    h["Authorization"] = "Bearer " + accessToken;
+  }
+  return h;
+}
+
+
+
+function ensureModalDom() {
+  let overlay = document.getElementById("aem-modal-overlay");
+  if (overlay) return overlay;
+  overlay = document.createElement("div");
+  overlay.id = "aem-modal-overlay";
+  overlay.style.cssText = "display:none;position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:9999;align-items:center;justify-content:center;padding:16px;";
+  overlay.innerHTML = `
+    <div id="aem-modal-panel" style="background:#fff;border-radius:12px;max-width:920px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 50px rgba(0,0,0,0.2);">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e2e8f0;position:sticky;top:0;background:#fff;z-index:1;">
+        <h2 id="modal-title" style="margin:0;font-size:18px;color:#0f172a;">Dialog</h2>
+        <button type="button" onclick="closeModal()" style="border:none;background:transparent;font-size:22px;cursor:pointer;line-height:1;color:#64748b;">×</button>
+      </div>
+      <div id="modal-body" style="padding:16px 18px;"></div>
+      <div id="modal-footer" style="padding:12px 18px;border-top:1px solid #e2e8f0;display:flex;gap:8px;justify-content:flex-end;position:sticky;bottom:0;background:#fff;"></div>
+    </div>`;
+  overlay.addEventListener("click", function (e) {
+    if (e.target === overlay) closeModal();
+  });
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function showModalShell(title, bodyHtml, footerHtml) {
+  const overlay = ensureModalDom();
+  const t = document.getElementById("modal-title");
+  const b = document.getElementById("modal-body");
+  const f = document.getElementById("modal-footer");
+  if (t) t.textContent = title || "Dialog";
+  if (b) b.innerHTML = bodyHtml || "";
+  if (f) f.innerHTML = footerHtml || "";
+  overlay.style.display = "flex";
+  document.body.style.overflow = "hidden";
+}
+
+function closeModal() {
+  const overlay = document.getElementById("aem-modal-overlay");
+  if (overlay) overlay.style.display = "none";
+  document.body.style.overflow = "";
+}
+
+
 // Global state
 let accessToken = null;
 let currentUser = null;
@@ -766,7 +824,7 @@ async function previewExcel() {
     try {
         const response = await fetch(`${API_BASE}/api/excel/bulk/preview`, {
             method: "POST",
-            headers: { "Authorization": `Bearer ${accessToken}` },
+            headers: bulkSessionHeaders(),
             body: formData
         });
         const data = await response.json();
@@ -782,11 +840,55 @@ async function previewExcel() {
 
         // Assets
         const assets = data.assets || {};
-        html += `<h4>1. Assets</h4>`;
+        html += "<h4>1. Assets</h4>";
         if (assets.summary) {
-            html += `<p>Planned uploads: ${assets.summary.total_planned_uploads || 0}, rejected size: ${assets.summary.total_rejected_size || 0}</p>`;
+            html += "<p>Planned uploads: " + (assets.summary.total_planned_uploads || 0) +
+              ", rejected size: " + (assets.summary.total_rejected_size || 0) + "</p>";
         } else {
-            html += `<p>${assets.message || assets.status || JSON.stringify(assets).slice(0, 200)}</p>`;
+            html += "<p>" + (assets.message || assets.status || "") + "</p>";
+        }
+        (assets.plans || []).forEach((p) => {
+          if (p.errors && p.errors.length) {
+            html += '<div style="color:#b91c1c;font-size:13px;">✗ Row ' + (p.excel_row || "") +
+              ": " + p.errors.join("; ") + "</div>";
+          }
+        });
+
+        // Recommendations (DAM alignment etc.)
+        const recs = data.recommendations || [];
+        if (recs.length) {
+          html += "<h4 style=\"color:#c2410c\">Recommendations — fix in Excel and re-upload</h4>";
+          recs.forEach((r) => {
+            html += '<div style="font-size:13px;margin:6px 0;padding:8px 10px;background:#fff7ed;border-left:4px solid #f97316;border-radius:4px;">' +
+              (r.message || "") +
+              (r.suggested_dam_paths ? "<br><code style=\"font-size:11px\">" + r.suggested_dam_paths.join(" · ") + "</code>" : "") +
+              "</div>";
+          });
+        }
+
+        // Session delta (re-upload after last apply)
+        const delta = data.session_delta || {};
+        if (delta.mode === "delta" && (delta.changed || []).length) {
+          html += "<h4 style=\"color:#1d4ed8\">Changes since last apply (this session)</h4>";
+          html += "<p style=\"font-size:13px;\">" + (delta.message || "") + " — highlighted fields only need re-apply.</p>";
+          (delta.changed || []).forEach((c) => {
+            html += '<div style="font-size:12px;margin:6px 0;padding:8px;background:#eff6ff;border-left:4px solid #3b82f6;border-radius:4px;">';
+            html += "<strong>" + (c.change_type || "") + "</strong> " + (c.page_path || "") + " · " + (c.component || "");
+            if (c.field_diffs) {
+              html += "<ul style=\"margin:4px 0 0 16px;\">";
+              Object.keys(c.field_diffs).forEach((fk) => {
+                const d = c.field_diffs[fk];
+                html += "<li><code>" + fk + "</code>: <span style=\"color:#94a3b8\">" + (d.from != null ? d.from : "∅") +
+                  "</span> → <strong style=\"color:#1d4ed8\">" + (d.to != null ? d.to : "∅") + "</strong></li>";
+              });
+              html += "</ul>";
+            }
+            html += "</div>";
+          });
+        } else if (delta.mode === "unchanged") {
+          html += "<p style=\"font-size:13px;color:#64748b;\">No field changes vs last apply in this session.</p>";
+        } else if (delta.mode === "full") {
+          html += "<p style=\"font-size:12px;color:#64748b;\">Full preview (no prior apply snapshot in this session).</p>";
         }
 
         // Pages
@@ -803,10 +905,20 @@ async function previewExcel() {
 
         // Add
         const adds = data.components_add || {};
-        html += `<h4>3. Components Add</h4>`;
-        html += `<p>${(adds.rows || []).length} row(s) to add</p>`;
-        (adds.rows || []).slice(0, 20).forEach((r) => {
-            html += `<div style="font-size:13px;"><code>${r.page_path}</code> + ${r.component}</div>`;
+        const addSum = adds.summary || {};
+        html += "<h4>3. Components Add</h4>";
+        html += "<p>Total: " + ((adds.rows || []).length) +
+          " · OK: " + (addSum.ok != null ? addSum.ok : "?") +
+          " · Blocked: " + (addSum.blocked != null ? addSum.blocked : "0") + "</p>";
+        (adds.rows || []).forEach((r) => {
+          const bad = r.errors && r.errors.length;
+          const color = bad ? "#b91c1c" : "#15803d";
+          html += '<div style="font-size:13px;margin:4px 0;color:' + color + ';">';
+          html += (bad ? "✗ " : "✓ ") + "<code>" + (r.page_path || "") + "</code> + " + (r.component || "");
+          if (r.page_status) html += " <span style=\"color:#64748b\">[" + r.page_status + "]</span>";
+          if (bad) html += "<br><span style=\"font-size:12px\">" + r.errors.join("; ") + "</span>";
+          if (r.warnings && r.warnings.length) html += "<br><span style=\"font-size:12px;color:#c2410c\">" + r.warnings.join("; ") + "</span>";
+          html += "</div>";
         });
 
         // Updates
@@ -853,6 +965,7 @@ async function applyExcel() {
         { id: "pages", label: "2. Page creation", endpoint: "/api/excel/pages/apply" },
         { id: "add", label: "3. Component add", endpoint: "/api/excel/components-add/apply" },
         { id: "update", label: "4. SEO / component update", endpoint: "/api/excel/apply" },
+        { id: "validate", label: "5. Validation report", endpoint: "/api/excel/bulk/validate" },
     ];
 
     function renderProgress(state) {
@@ -906,7 +1019,20 @@ async function applyExcel() {
             };
             return data;
         }
-        const st = data.status === "partial" ? "partial" : "success";
+        let st = "success";
+        if (data.status === "partial") st = "partial";
+        if (data.status === "error" || data.status === "failed") st = "error";
+        if (data.status === "passed" || data.status === "success") st = (st === "error" ? "error" : "success");
+        if (data.status === "passed") st = "success";
+        // Assets: any row errors → not full success
+        if (step.id === "assets" && data.results) {
+            const bad = (data.results || []).filter((r) => r.status === "error" || (r.errors && r.errors.length) || (r.upload && r.upload.status === "error"));
+            if (bad.length) st = bad.length === data.results.length ? "error" : "partial";
+        }
+        if (step.id === "validate") {
+            if (data.status === "failed" || (data.summary && data.summary.fail > 0)) st = "error";
+            else if (data.summary && data.summary.warn > 0) st = "partial";
+        }
         state[step.id] = {
             status: st,
             message: data.message || (st === "success" ? "Completed" : "Completed with issues"),
@@ -919,12 +1045,12 @@ async function applyExcel() {
     try {
         const assetsRes = await runStep(steps[0]);
         const pagesRes = await runStep(steps[1]);
-
-        // Component add: still run for pages that exist; backend skips missing pages
         const addRes = await runStep(steps[2]);
         const updateRes = await runStep(steps[3]);
+        // Step 5 — always run validation (even if earlier steps partial)
+        const validateRes = await runStep(steps[4]);
 
-        // Summary
+        // Summary (only after validation)
         let ok = 0, partial = 0, err = 0;
         steps.forEach((s) => {
             const st = state[s.id].status;
@@ -932,14 +1058,57 @@ async function applyExcel() {
             else if (st === "partial") partial++;
             else if (st === "error") err++;
         });
-        let summaryColor = err === 0 && partial === 0 ? "#15803d" : (ok > 0 ? "#c2410c" : "#b91c1c");
-        state.summaryHtml = '<div style="padding:14px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;">' +
-            '<div style="font-weight:700;color:' + summaryColor + ';margin-bottom:6px;">Summary</div>' +
-            '<div style="font-size:13px;">Steps OK: ' + ok + ' · Partial: ' + partial + ' · Failed: ' + err + '</div>' +
-            '<div style="font-size:12px;color:#64748b;margin-top:6px;">Missing pages are skipped for component add. Fix blocked pages and re-run if needed.</div></div>';
+        const val = (state.validate && state.validate.detail) || {};
+        const hl = val.high_level || {};
+        let summaryColor = err === 0 && partial === 0 && val.status !== "failed" ? "#15803d" : (ok > 0 ? "#c2410c" : "#b91c1c");
+        window.__lastValidationReport = val;
+
+        function tickRow(label, block) {
+          if (!block) {
+            return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><span style="color:#94a3b8;">○</span> ' + label + ' <span style="color:#94a3b8;font-size:12px;">n/a</span></div>';
+          }
+          const fail = block.fail || 0;
+          const pass = block.pass || 0;
+          const warn = block.warn || 0;
+          let icon = "✓", color = "#15803d", note = "OK";
+          if (fail > 0 && pass === 0) { icon = "✗"; color = "#b91c1c"; note = fail + " failed"; }
+          else if (fail > 0) { icon = "!"; color = "#c2410c"; note = pass + " ok, " + fail + " failed"; }
+          else if (warn > 0) { icon = "!"; color = "#c2410c"; note = "OK with " + warn + " warning(s)"; }
+          else { note = pass + " check(s) passed"; }
+          return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><span style="color:' + color + ';font-weight:700;font-size:16px;">' + icon + '</span> <span style="font-weight:500;">' + label + '</span> <span style="color:' + color + ';font-size:12px;">' + note + '</span></div>';
+        }
+
+        state.summaryHtml =
+          '<style>.val-report-btn{padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;font-size:13px;color:#0f172a;transition:background .15s,border-color .15s,color .15s;}.val-report-btn:hover{background:#eff6ff;border-color:#3b82f6;color:#1d4ed8;}.val-report-btn-primary{background:#1e3a5f;border-color:#1e3a5f;color:#fff;}.val-report-btn-primary:hover{background:#2563eb;border-color:#2563eb;color:#fff;}</style>' +
+          '<div style="padding:14px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;">' +
+          '<div style="font-weight:700;color:' + summaryColor + ';margin-bottom:8px;">High-level validation</div>' +
+          '<div style="font-size:13px;line-height:1.5;">' +
+          '<div style="margin-bottom:6px;color:#64748b;">Pipeline — OK: ' + ok + ' · Partial: ' + partial + ' · Failed: ' + err + '</div>' +
+          tickRow("Asset paths validated", hl.assets) +
+          tickRow("Pages created / present", hl.pages) +
+          tickRow("Components added", hl.components) +
+          tickRow("Component field data matched", hl.components) +
+          tickRow("SEO / page properties updated", hl.seo) +
+          (val.message ? '<div style="margin-top:8px;font-size:12px;color:#475569;">' + val.message + '</div>' : '') +
+          '</div>' +
+          '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">' +
+          '<button type="button" class="val-report-btn val-report-btn-primary" onclick="showDetailedValidationReport()">View detailed report</button>' +
+          '<button type="button" class="val-report-btn" onclick="downloadValidationReportExcel()">Download Excel report</button>' +
+          '<button type="button" class="val-report-btn" onclick="downloadValidationReport()">Download JSON report</button>' +
+          '</div></div>';
         renderProgress(state);
         messageEl.textContent = err === 0 ? "Bulk apply finished" : "Bulk apply finished with errors — see steps below";
         messageEl.className = err === 0 ? "message success" : "message error";
+        // Save session snapshot for next delta preview
+        try {
+          const fd = new FormData();
+          fd.append("file", lastExcelFile);
+          await fetch(API_BASE + "/api/excel/bulk/session/mark-applied", {
+            method: "POST",
+            headers: bulkSessionHeaders(),
+            body: fd,
+          });
+        } catch (_) {}
     } catch (e) {
         messageEl.textContent = e.message || String(e);
         messageEl.className = "message error";
@@ -1253,8 +1422,11 @@ function renderTemplateUI(components) {
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
         <input type="checkbox" id="tpl-include-add" checked /> Components <strong>Add</strong> sheets (new components on a page)
       </label>
-      <p style="margin:8px 0 0;font-size:12px;color:#64748b;">
-        Page Properties / SEO comes only from the selection under <strong>Components &amp; fields</strong> below (choose the fields you need — no separate SEO checkbox).
+      <p id="tpl-mode-hint" style="margin:8px 0 0;font-size:12px;color:#334155;line-height:1.45;">
+        <strong>Mode:</strong> Tick <em>Pages</em> for new-page work (components = Add sheets). Leave Pages unticked for update-only templates (Instance column).
+      </p>
+      <p style="margin:6px 0 0;font-size:12px;color:#64748b;">
+        Page Properties / SEO comes only from the selection under <strong>Components &amp; fields</strong> below.
       </p>
     </div>
     <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#0f172a;">Components & fields</div>`;
@@ -1527,6 +1699,62 @@ async function generateExcelTemplate() {
     closeModal();
   } catch (e) {
     alert(e.message);
+  }
+}
+
+
+function ensureToolbarButtons() {
+  // Enterprise toolbar: Dictionary, Create Template, Previous Templates, Catalog sync
+  let bar = document.getElementById("aem-tools-toolbar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "aem-tools-toolbar";
+    bar.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;align-items:center;";
+    // Prefer near bulk update section
+    const bulk =
+      document.getElementById("excel-file")?.closest(".card, section, .panel, div") ||
+      document.getElementById("excel-message")?.parentElement ||
+      document.querySelector("main") ||
+      document.body;
+    const anchor = document.getElementById("excel-file");
+    if (anchor && anchor.parentElement) {
+      anchor.parentElement.insertBefore(bar, anchor);
+    } else if (bulk) {
+      bulk.insertBefore(bar, bulk.firstChild);
+    } else {
+      document.body.insertBefore(bar, document.body.firstChild);
+    }
+  }
+  const buttons = [
+    { id: "btn-open-dictionary", label: "Open Dictionary", onClick: "openDictionaryModal()" },
+    { id: "btn-create-template", label: "Create Excel Template", onClick: "openTemplateModal()" },
+    { id: "btn-load-prev-templates", label: "Previous Excel Templates", onClick: "loadPreviousTemplates()" },
+    { id: "btn-clear-bulk-session", label: "Clear bulk session", onClick: "clearBulkSession()" },
+  ];
+  buttons.forEach((b) => {
+    if (document.getElementById(b.id)) return;
+    const btn = document.createElement("button");
+    btn.id = b.id;
+    btn.type = "button";
+    btn.textContent = b.label;
+    btn.setAttribute("onclick", b.onClick);
+    btn.style.cssText = "padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;font-size:13px;font-weight:500;color:#0f172a;";
+    btn.onmouseover = function () { this.style.background = "#f1f5f9"; };
+    btn.onmouseout = function () { this.style.background = "#fff"; };
+    bar.appendChild(btn);
+  });
+  // catalog message host
+  if (!document.getElementById("catalog-message")) {
+    const m = document.createElement("div");
+    m.id = "catalog-message";
+    m.style.cssText = "width:100%;font-size:12px;color:#64748b;margin-top:4px;";
+    bar.appendChild(m);
+  }
+  if (!document.getElementById("catalog-list")) {
+    const list = document.createElement("div");
+    list.id = "catalog-list";
+    list.style.cssText = "width:100%;margin-top:8px;";
+    bar.appendChild(list);
   }
 }
 
@@ -2437,7 +2665,20 @@ if (document.readyState === "loading") {
 function onTplIncludePagesChange() {
   const box = document.getElementById("tpl-pages-options");
   const cb = document.getElementById("tpl-include-pages");
+  const addCb = document.getElementById("tpl-include-add");
+  const modeHint = document.getElementById("tpl-mode-hint");
   if (box && cb) box.style.display = cb.checked ? "block" : "none";
+  // New page flow → prefer Add sheets; updates belong in a separate template
+  if (cb && cb.checked && addCb) {
+    addCb.checked = true;
+  }
+  if (modeHint) {
+    if (cb && cb.checked) {
+      modeHint.innerHTML = "<strong>Mode: New pages.</strong> Selected components become <em>Add …</em> sheets only (no Instance / update sheets). For updates on existing pages, uncheck Pages and generate a second template.";
+    } else {
+      modeHint.innerHTML = "<strong>Mode: Update existing.</strong> Selected components become sheets with an <em>Instance</em> column. Use separate Add sheets only if you also tick Components Add.";
+    }
+  }
 }
 
 async function loadTplTemplates() {
@@ -2476,3 +2717,134 @@ async function loadTplTemplates() {
   }
 }
 
+
+
+function showDetailedValidationReport() {
+  const val = window.__lastValidationReport;
+  if (!val || !val.detailed) {
+    alert("No validation report available. Run Apply Changes first.");
+    return;
+  }
+  const sections = val.detailed;
+  let html = '<div style="max-height:70vh;overflow:auto;text-align:left;">';
+  html += '<h3 style="margin-top:0;">Detailed validation report</h3>';
+  html += '<p style="font-size:13px;color:#64748b;">Excel is source of truth. Every check below is pin-level.</p>';
+  ["assets", "pages", "components", "seo"].forEach((key) => {
+    const items = sections[key] || [];
+    html += '<h4 style="margin:16px 0 8px;text-transform:uppercase;font-size:12px;letter-spacing:0.04em;color:#475569;">' + key + ' (' + items.length + ')</h4>';
+    items.forEach((it) => {
+      const c = it.severity === "pass" ? "#15803d" : (it.severity === "warn" ? "#c2410c" : "#b91c1c");
+      html += '<div style="border:1px solid #e2e8f0;border-left:4px solid ' + c + ';padding:8px 10px;margin-bottom:6px;border-radius:6px;font-size:12px;">';
+      html += '<div style="font-weight:600;color:' + c + ';">' + (it.severity || "").toUpperCase() + " — " + (it.message || "") + "</div>";
+      if (it.page_path) html += '<div>Page: <code>' + it.page_path + '</code></div>';
+      if (it.dam_path) html += '<div>DAM: <code>' + it.dam_path + '</code></div>';
+      if (it.component_path) html += '<div>Component: <code>' + it.component_path + '</code></div>';
+      if (it.size_kb != null) html += '<div>Size: ' + it.size_kb + ' KB</div>';
+      if (it.field_checks && it.field_checks.length) {
+        html += '<table style="width:100%;margin-top:6px;border-collapse:collapse;font-size:11px;">';
+        html += '<tr style="background:#f8fafc;"><th style="text-align:left;padding:4px;">Field</th><th style="text-align:left;padding:4px;">Expected</th><th style="text-align:left;padding:4px;">Actual</th><th style="text-align:left;padding:4px;">OK</th></tr>';
+        it.field_checks.forEach((fc) => {
+          html += '<tr><td style="padding:4px;border-top:1px solid #eee;">' + (fc.field || "") + '</td>';
+          html += '<td style="padding:4px;border-top:1px solid #eee;">' + (fc.expected != null ? fc.expected : "") + '</td>';
+          html += '<td style="padding:4px;border-top:1px solid #eee;">' + (fc.actual != null ? fc.actual : "—") + '</td>';
+          html += '<td style="padding:4px;border-top:1px solid #eee;color:' + (fc.ok ? "#15803d" : "#b91c1c") + ';">' + (fc.ok ? "✓" : "✗") + '</td></tr>';
+        });
+        html += '</table>';
+      }
+      html += '</div>';
+    });
+  });
+  html += '</div>';
+  if (typeof showModalShell === "function") {
+    showModalShell("Validation report", html, "");
+  } else {
+    const w = window.open("", "_blank");
+    if (w) {
+      w.document.write(html);
+      w.document.close();
+    } else {
+      alert("Detailed report ready — allow popups or use Download JSON.");
+    }
+  }
+}
+
+
+
+async function downloadValidationReportExcel() {
+  try {
+    if (!accessToken) {
+      alert("Please log in first.");
+      return;
+    }
+    if (!lastExcelFile) {
+      alert("No Excel file in session. Run Preview/Apply with an Excel file first.");
+      return;
+    }
+    const formData = new FormData();
+    formData.append("file", lastExcelFile);
+    const res = await fetch(API_BASE + "/api/excel/bulk/validate/export?format=xlsx", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + accessToken },
+      body: formData,
+    });
+    if (!res.ok) {
+      let msg = "Excel export failed (HTTP " + res.status + ")";
+      try {
+        const err = await res.json();
+        msg = err.message || err.detail || msg;
+      } catch (_) {
+        try { msg = await res.text(); } catch (__) {}
+      }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    // Guard: API may have returned JSON error with 200 in rare cases
+    if ((blob.type || "").includes("application/json")) {
+      const text = await blob.text();
+      throw new Error(text.slice(0, 200) || "Export returned JSON, not Excel");
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "AEM_Bulk_Validation_Report.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    console.error(e);
+    alert(e.message || String(e));
+  }
+}
+
+function downloadValidationReport() {
+  const val = window.__lastValidationReport;
+  if (!val) {
+    alert("No validation report available. Run Apply Changes first.");
+    return;
+  }
+  const blob = new Blob([JSON.stringify(val, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "AEM_Bulk_Validation_Report.json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+
+async function clearBulkSession() {
+  if (!accessToken) return;
+  if (!confirm("Clear bulk session on this page?\n\n• Next Preview will be a full baseline (not a delta of previous apply).\n• Use this when you want a new bulk run without reloading the page.\n\nTip: Reloading the page also starts a fresh session automatically.")) return;
+  try {
+    await fetch(API_BASE + "/api/excel/bulk/session/clear", {
+      method: "POST",
+      headers: bulkSessionHeaders(),
+    });
+    // Rotate client id so this page continues with a brand-new session
+    bulkSessionId = newBulkSessionId();
+    alert("Bulk session cleared. Next Preview is a full baseline (same as after a page reload).");
+  } catch (e) {
+    alert(e.message || String(e));
+  }
+}

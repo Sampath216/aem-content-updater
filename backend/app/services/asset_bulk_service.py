@@ -112,25 +112,55 @@ def plan_asset_uploads(content: bytes) -> dict:
             "unmatched_dirs": scan.get("unmatched_dirs"),
         }
         if scan.get("status") != "success":
-            entry["errors"].append(scan.get("message") or "Local scan failed")
+            entry["errors"].append(scan.get("message") or "Local path missing or has no assets")
+            entry["local_exists"] = scan.get("exists")
+            entry["scan"] = {
+                "status": scan.get("status"),
+                "message": scan.get("message"),
+                "mode": scan.get("mode"),
+            }
             plans.append(entry)
             continue
 
-        for bp in BREAKPOINTS:
-            for item in scan.get("breakpoints", {}).get(bp) or []:
+        entry["mode"] = scan.get("mode")
+        if scan.get("mode") == "empty" or not scan.get("total_files"):
+            entry["errors"].append(
+                "Local folder has no uploadable assets (need Desktop/Mobile/Tablet or files in folder)"
+            )
+            plans.append(entry)
+            continue
+
+        if scan.get("mode") == "flat":
+            for item in scan.get("flat_files") or []:
                 rec = {
-                    "breakpoint": bp,
+                    "breakpoint": None,
                     "local_path": item.get("local_path"),
                     "original_name": item.get("original_name"),
                     "dam_name": item.get("dam_name"),
-                    "dam_path": f"{target}/{bp}/{item.get('dam_name')}",
+                    "dam_path": f"{target}/{item.get('dam_name')}",
                     "size_kb": item.get("size_kb"),
                     "size_allowed": item.get("size_allowed"),
                     "mime": item.get("content_type"),
                     "action": "upload" if item.get("size_allowed") else "reject_size",
-                    "message": item.get("size_message"),
+                    "message": item.get("size_message") or "Flat mode → DAM page folder",
                 }
                 entry["upload_plan"].append(rec)
+        else:
+            for bp in BREAKPOINTS:
+                for item in scan.get("breakpoints", {}).get(bp) or []:
+                    rec = {
+                        "breakpoint": bp,
+                        "local_path": item.get("local_path"),
+                        "original_name": item.get("original_name"),
+                        "dam_name": item.get("dam_name"),
+                        "dam_path": f"{target}/{bp}/{item.get('dam_name')}",
+                        "size_kb": item.get("size_kb"),
+                        "size_allowed": item.get("size_allowed"),
+                        "mime": item.get("content_type"),
+                        "action": "upload" if item.get("size_allowed") else "reject_size",
+                        "message": item.get("size_message"),
+                    }
+                    entry["upload_plan"].append(rec)
 
         entry["summary"] = {
             "files": len(entry["upload_plan"]),

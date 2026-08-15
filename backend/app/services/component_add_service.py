@@ -23,6 +23,7 @@ import re
 from typing import Any, Dict, List, Optional, Set
 
 from backend.app.services.aem_client import AEMClient
+from backend.app.services.excel_bulk_service import normalize_props
 
 LAYOUT_HINTS = (
     "responsivegrid",
@@ -464,7 +465,7 @@ class ComponentAddService:
             n += 1
 
         target = f"{container_path}/{candidate}"
-        props = properties or {}
+        props = normalize_props(properties or {})
         data = {
             f"{candidate}/jcr:primaryType": "nt:unstructured",
             f"{candidate}/sling:resourceType": rt,
@@ -616,7 +617,7 @@ class ComponentAddService:
                 container_path=container,
                 resource_type=item["resourceType"],
                 node_name=item.get("node_name"),
-                properties=item.get("properties") or {},
+                properties=normalize_props(item.get("properties") or {}),
                 order_index=item.get("order") or 1,
             )
             r["order"] = item.get("order")
