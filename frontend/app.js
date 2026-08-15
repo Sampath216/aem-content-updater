@@ -755,268 +755,199 @@ async function previewExcel() {
     const file = fileInput.files[0];
     lastExcelFile = file;
 
-    messageEl.textContent = "Generating preview...";
+    messageEl.textContent = "Generating full bulk preview (Assets → Pages → Add → Update)...";
     messageEl.className = "message";
     previewEl.style.display = "none";
-    applyBtn.style.display = "none";
+    if (applyBtn) applyBtn.style.display = "none";
 
     const formData = new FormData();
     formData.append("file", file);
 
     try {
-        const response = await fetch(`${API_BASE}/api/excel/preview`, {
+        const response = await fetch(`${API_BASE}/api/excel/bulk/preview`, {
             method: "POST",
-            headers: {
-                "Authorization": `Bearer ${accessToken}`
-            },
+            headers: { "Authorization": `Bearer ${accessToken}` },
             body: formData
         });
-
         const data = await response.json();
-
-        if (!response.ok || data.status !== "success") {
+        if (!response.ok || data.status === "error") {
             throw new Error(data.message || data.detail || "Preview failed");
         }
 
-        const summary = data.summary || {};
-        const seoCount = summary.total_seo_rows ?? (data.seo_updates || []).length;
-        const compCount = summary.total_component_rows ?? (data.component_updates || []).length;
-        messageEl.textContent = `Preview ready – ${seoCount} SEO/page rows, ${compCount} component rows` +
-            (summary.duplicates_removed ? ` (${summary.duplicates_removed} duplicates removed)` : "");
+        messageEl.textContent = data.message || "Full bulk preview ready";
         messageEl.className = "message success";
 
-        // Build preview HTML
-        let html = `<h3 style="margin-bottom:12px;">Preview of Changes</h3>`;
+        let html = `<h3 style="margin-bottom:12px;">Full Bulk Preview</h3>`;
+        html += `<p style="font-size:13px;color:#64748b;">Order: Assets → Pages → Component Add → SEO/Update</p>`;
 
-        if (data.seo_updates && data.seo_updates.length > 0) {
-            html += `<h4>SEO / Page Properties (${data.seo_updates.length})</h4>`;
-            html += `<div style="max-height:260px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:10px; margin-bottom:15px;">`;
-            data.seo_updates.forEach(item => {
-                const hasErr = item.errors && item.errors.length;
-                html += `<div style="margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #f0f0f0;">
-                    <strong>${hasErr ? "⚠️ " : ""}${item.page_path}</strong><br>`;
-                for (const [k, v] of Object.entries(item.properties || {})) {
-                    html += `<span style="font-size:12px; color:#555;">${k}: <b>${v}</b></span><br>`;
-                }
-                if (hasErr) {
-                    html += `<span style="color:#c62828;font-size:12px;">${item.errors.join(" | ")}</span><br>`;
-                }
-                if (item.rejected_fields && item.rejected_fields.length) {
-                    html += `<span style="color:#c62828;font-size:12px;">Rejected: ${item.rejected_fields.map(r => r.name || r).join(", ")}</span><br>`;
-                }
-                html += `</div>`;
-            });
-            html += `</div>`;
+        // Assets
+        const assets = data.assets || {};
+        html += `<h4>1. Assets</h4>`;
+        if (assets.summary) {
+            html += `<p>Planned uploads: ${assets.summary.total_planned_uploads || 0}, rejected size: ${assets.summary.total_rejected_size || 0}</p>`;
+        } else {
+            html += `<p>${assets.message || assets.status || JSON.stringify(assets).slice(0, 200)}</p>`;
         }
 
-        if (data.component_updates && data.component_updates.length > 0) {
-            html += `<h4>Component Updates (${data.component_updates.length})</h4>`;
-            html += `<div style="max-height:300px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:10px;">`;
-            data.component_updates.forEach(item => {
-                html += `<div style="margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #f0f0f0;">
-                    <strong>${item.component_name}</strong> (Instance ${item.instance}) on <code>${item.page_path}</code><br>`;
-                for (const [k, v] of Object.entries(item.properties)) {
-                    html += `<span style="font-size:12px; color:#555;">${k}: <b>${v}</b></span><br>`;
-                }
-                html += `</div>`;
-            });
-            html += `</div>`;
+        // Pages
+        const pages = data.pages || {};
+        html += `<h4>2. Pages</h4>`;
+        if (pages.summary) {
+            html += `<p>Will create: ${pages.summary.will_create || 0}, exists: ${pages.summary.exists || 0}, blocked: ${pages.summary.blocked || 0}</p>`;
         }
+        (pages.plans || []).forEach((p) => {
+            html += `<div style="font-size:13px;margin:4px 0;"><code>${p.page_path || ""}</code> → <strong>${p.action || ""}</strong>`;
+            if (p.errors && p.errors.length) html += ` <span style="color:#c62828;">${p.errors.join("; ")}</span>`;
+            html += `</div>`;
+        });
+
+        // Add
+        const adds = data.components_add || {};
+        html += `<h4>3. Components Add</h4>`;
+        html += `<p>${(adds.rows || []).length} row(s) to add</p>`;
+        (adds.rows || []).slice(0, 20).forEach((r) => {
+            html += `<div style="font-size:13px;"><code>${r.page_path}</code> + ${r.component}</div>`;
+        });
+
+        // Updates
+        const updates = data.updates || {};
+        const summary = updates.summary || {};
+        const seoN = summary.total_seo_rows != null ? summary.total_seo_rows : ((updates.seo_updates || []).length || 0);
+        const compN = summary.total_component_rows != null ? summary.total_component_rows : ((updates.component_updates || []).length || 0);
+        html += "<h4>4. SEO / Component Updates</h4>";
+        html += "<p>SEO rows: " + seoN + ", Component rows: " + compN + "</p>";
+        const summaryJson = escapeDict(JSON.stringify({
+            assets_summary: assets.summary,
+            pages_summary: pages.summary,
+            add_count: (adds.rows || []).length,
+            updates_summary: summary
+        }, null, 2));
+        html += '<pre style="font-size:11px;max-height:200px;overflow:auto;background:#f8fafc;padding:8px;border-radius:6px;">' + summaryJson + "</pre>";
 
         previewEl.innerHTML = html;
         previewEl.style.display = "block";
-        applyBtn.style.display = "inline-block";
-
-    } catch (error) {
-        messageEl.textContent = error.message;
+        if (applyBtn) applyBtn.style.display = "inline-block";
+    } catch (e) {
+        messageEl.textContent = e.message || String(e);
         messageEl.className = "message error";
+        console.error(e);
     }
 }
+
 
 async function applyExcel() {
-    if (!lastExcelFile) {
-        alert("Please preview the Excel first");
-        return;
-    }
-
-    if (!confirm("Are you sure you want to apply all these changes to AEM?\n\nThis action cannot be undone easily.")) {
-        return;
-    }
-
     const messageEl = document.getElementById("excel-message");
     const previewEl = document.getElementById("excel-preview");
+    if (!lastExcelFile) {
+        messageEl.textContent = "Please preview an Excel file first";
+        messageEl.className = "message error";
+        return;
+    }
+    if (!confirm("Run FULL bulk apply?\n1) Assets  2) Pages  3) Add components  4) SEO/Update")) return;
 
-    messageEl.textContent = "Applying changes... Please wait...";
+    messageEl.textContent = "Running full bulk apply...";
     messageEl.className = "message";
 
-    const formData = new FormData();
-    formData.append("file", lastExcelFile);
+    const steps = [
+        { id: "assets", label: "1. Assets upload", endpoint: "/api/excel/assets/apply" },
+        { id: "pages", label: "2. Page creation", endpoint: "/api/excel/pages/apply" },
+        { id: "add", label: "3. Component add", endpoint: "/api/excel/components-add/apply" },
+        { id: "update", label: "4. SEO / component update", endpoint: "/api/excel/apply" },
+    ];
+
+    function renderProgress(state) {
+        let html = '<h3 style="margin-bottom:14px;">Bulk Apply Progress</h3>';
+        html += '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">';
+        steps.forEach((s) => {
+            const st = state[s.id] || { status: "pending" };
+            let color = "#94a3b8", bg = "#f8fafc", icon = "○", border = "#e2e8f0";
+            if (st.status === "running") { color = "#2563eb"; bg = "#eff6ff"; icon = "…"; border = "#93c5fd"; }
+            if (st.status === "success") { color = "#15803d"; bg = "#f0fdf4"; icon = "✓"; border = "#86efac"; }
+            if (st.status === "partial") { color = "#c2410c"; bg = "#fff7ed"; icon = "!"; border = "#fdba74"; }
+            if (st.status === "error") { color = "#b91c1c"; bg = "#fef2f2"; icon = "✗"; border = "#fca5a5"; }
+            if (st.status === "skipped") { color = "#64748b"; bg = "#f1f5f9"; icon = "–"; border = "#cbd5e1"; }
+            html += '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border-radius:8px;border:1px solid ' + border + ';background:' + bg + ';">';
+            html += '<div style="width:28px;height:28px;border-radius:50%;background:' + color + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;">' + icon + '</div>';
+            html += '<div style="flex:1;min-width:0;">';
+            html += '<div style="font-weight:600;color:#0f172a;">' + s.label + '</div>';
+            html += '<div style="font-size:12px;color:' + color + ';margin-top:2px;">' + (st.message || st.status) + '</div>';
+            if (st.detail) {
+                html += '<pre style="margin:8px 0 0;font-size:11px;max-height:120px;overflow:auto;background:rgba(255,255,255,0.7);padding:8px;border-radius:6px;">' + escapeDict(typeof st.detail === "string" ? st.detail : JSON.stringify(st.detail, null, 2)) + '</pre>';
+            }
+            html += '</div></div>';
+        });
+        html += '</div>';
+        if (state.summaryHtml) html += state.summaryHtml;
+        previewEl.innerHTML = html;
+        previewEl.style.display = "block";
+    }
+
+    const state = {};
+    steps.forEach((s) => { state[s.id] = { status: "pending", message: "Waiting..." }; });
+    renderProgress(state);
+
+    async function runStep(step) {
+        state[step.id] = { status: "running", message: "In progress..." };
+        renderProgress(state);
+        const formData = new FormData();
+        formData.append("file", lastExcelFile);
+        const response = await fetch(API_BASE + step.endpoint, {
+            method: "POST",
+            headers: { Authorization: "Bearer " + accessToken },
+            body: formData,
+        });
+        let data = {};
+        try { data = await response.json(); } catch (_) { data = { status: "error", message: "Invalid response" }; }
+        if (!response.ok || data.status === "error") {
+            state[step.id] = {
+                status: "error",
+                message: data.message || data.detail || "Failed",
+                detail: data,
+            };
+            return data;
+        }
+        const st = data.status === "partial" ? "partial" : "success";
+        state[step.id] = {
+            status: st,
+            message: data.message || (st === "success" ? "Completed" : "Completed with issues"),
+            detail: data,
+        };
+        renderProgress(state);
+        return data;
+    }
 
     try {
-        const response = await fetch(`${API_BASE}/api/excel/apply`, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${accessToken}`
-            },
-            body: formData
+        const assetsRes = await runStep(steps[0]);
+        const pagesRes = await runStep(steps[1]);
+
+        // Component add: still run for pages that exist; backend skips missing pages
+        const addRes = await runStep(steps[2]);
+        const updateRes = await runStep(steps[3]);
+
+        // Summary
+        let ok = 0, partial = 0, err = 0;
+        steps.forEach((s) => {
+            const st = state[s.id].status;
+            if (st === "success") ok++;
+            else if (st === "partial") partial++;
+            else if (st === "error") err++;
         });
-
-        const data = await response.json();
-
-        // Safer handling
-        if (!response.ok) {
-            throw new Error(data.detail || data.message || "Apply failed with server error");
-        }
-
-        if (data.status !== "success") {
-            throw new Error(data.message || "Apply failed");
-        }
-
-        const res = data.results || {};
-        const successCount = res.success_count || 0;
-        const errorCount = res.error_count || 0;
-        const skippedCount = res.skipped_count || 0;
-
-        messageEl.textContent = `Completed – Success: ${successCount}, Errors: ${errorCount}, Skipped: ${skippedCount}`;
-        messageEl.className = errorCount > 0 ? "message error" : "message success";
-
-        // Build detailed report
-        let html = `<h3 style="margin-bottom:12px;">Detailed Results</h3>`;
-        html += `<p><strong>Success:</strong> ${successCount} &nbsp;|&nbsp; <strong>Errors:</strong> ${errorCount} &nbsp;|&nbsp; <strong>Skipped:</strong> ${skippedCount}</p>`;
-
-        // SEO Results
-        if (res.seo_results && res.seo_results.length > 0) {
-            html += `<h4 style="margin-top:18px;">SEO / Page Properties</h4>`;
-            html += `<div style="max-height:300px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:12px;">`;
-
-            res.seo_results.forEach(r => {
-                const hasError = r.errors && r.errors.length > 0;
-                const icon = hasError ? "❌" : (r.updated_fields && r.updated_fields.length > 0 ? "✅" : "⏭️");
-
-                html += `<div style="margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid #f0f0f0;">
-                    <strong>${icon} ${r.page_path}</strong><br>`;
-
-                if (r.updated_fields && r.updated_fields.length > 0) {
-                    html += `<span style="color:#2e7d32; font-size:13px;">Updated: ${r.updated_fields.join(", ")}</span><br>`;
-                }
-                if (r.skipped_fields && r.skipped_fields.length > 0) {
-                    html += `<span style="color:#f57c00; font-size:13px;">Skipped: ${r.skipped_fields.join(", ")}</span><br>`;
-                }
-                if (r.errors && r.errors.length > 0) {
-                    html += `<span style="color:#c62828; font-size:13px;">Errors: ${r.errors.join(" | ")}</span><br>`;
-                }
-                html += `</div>`;
-            });
-            html += `</div>`;
-        }
-
-        // Component Results
-        if (res.component_results && res.component_results.length > 0) {
-            html += `<h4 style="margin-top:18px;">Component Updates</h4>`;
-            html += `<div style="max-height:300px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:12px;">`;
-
-            res.component_results.forEach(r => {
-                const hasError = r.errors && r.errors.length > 0;
-                const icon = hasError ? "❌" : (r.updated_fields && r.updated_fields.length > 0 ? "✅" : "⏭️");
-
-                html += `<div style="margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid #f0f0f0;">
-                    <strong>${icon} ${r.component_name} (Instance ${r.instance})</strong> on <code>${r.page_path}</code><br>`;
-
-                if (r.component_path) {
-                    html += `<span style="font-size:12px; color:#666;">Path: ${r.component_path}</span><br>`;
-                }
-                if (r.updated_fields && r.updated_fields.length > 0) {
-                    html += `<span style="color:#2e7d32; font-size:13px;">Updated: ${r.updated_fields.join(", ")}</span><br>`;
-                }
-                if (r.skipped_fields && r.skipped_fields.length > 0) {
-                    html += `<span style="color:#f57c00; font-size:13px;">Skipped: ${r.skipped_fields.join(", ")}</span><br>`;
-                }
-                if (r.errors && r.errors.length > 0) {
-                    html += `<span style="color:#c62828; font-size:13px;">Errors: ${r.errors.join(" | ")}</span><br>`;
-                }
-                html += `</div>`;
-            });
-            html += `</div>`;
-        }
-
-        previewEl.innerHTML = html;
-
-    } catch (error) {
-        messageEl.textContent = error.message;
+        let summaryColor = err === 0 && partial === 0 ? "#15803d" : (ok > 0 ? "#c2410c" : "#b91c1c");
+        state.summaryHtml = '<div style="padding:14px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;">' +
+            '<div style="font-weight:700;color:' + summaryColor + ';margin-bottom:6px;">Summary</div>' +
+            '<div style="font-size:13px;">Steps OK: ' + ok + ' · Partial: ' + partial + ' · Failed: ' + err + '</div>' +
+            '<div style="font-size:12px;color:#64748b;margin-top:6px;">Missing pages are skipped for component add. Fix blocked pages and re-run if needed.</div></div>';
+        renderProgress(state);
+        messageEl.textContent = err === 0 ? "Bulk apply finished" : "Bulk apply finished with errors — see steps below";
+        messageEl.className = err === 0 ? "message success" : "message error";
+    } catch (e) {
+        messageEl.textContent = e.message || String(e);
         messageEl.className = "message error";
-        console.error("Apply error:", error);
+        console.error(e);
     }
 }
 
 
-// ========== FIELD DICTIONARY + TEMPLATE GENERATOR UI ==========
-
-function ensureToolbarButtons() {
-  let bar = document.getElementById("tool-extra-actions");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.id = "tool-extra-actions";
-    bar.style.cssText = "display:flex; gap:10px; flex-wrap:wrap; margin:12px 0;";
-    const host =
-      document.getElementById("page-path-card") ||
-      document.getElementById("components-card") ||
-      document.querySelector("main") ||
-      document.body;
-    host.parentNode.insertBefore(bar, host.nextSibling);
-  }
-  if (!document.getElementById("btn-open-dictionary")) {
-    const b1 = document.createElement("button");
-    b1.id = "btn-open-dictionary";
-    b1.type = "button";
-    b1.textContent = "Open Dictionary";
-    b1.className = "btn";
-    b1.style.cssText = "padding:8px 14px; border-radius:6px; border:1px solid #cbd5e1; background:#fff; cursor:pointer; font-weight:500;";
-    b1.onclick = openDictionaryModal;
-    bar.appendChild(b1);
-  }
-  if (!document.getElementById("btn-create-template")) {
-    const b2 = document.createElement("button");
-    b2.id = "btn-create-template";
-    b2.type = "button";
-    b2.textContent = "Create Excel Template";
-    b2.className = "btn";
-    b2.style.cssText = "padding:8px 14px; border-radius:6px; border:none; background:#2563eb; color:#fff; cursor:pointer; font-weight:500;";
-    b2.onclick = openTemplateModal;
-    bar.appendChild(b2);
-  }
-}
-
-function ensureModalRoot() {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    document.body.appendChild(root);
-  }
-  return root;
-}
-
-function closeModal() {
-  const root = document.getElementById("modal-root");
-  if (root) root.innerHTML = "";
-}
-
-function showModalShell(title, bodyHtml, footerHtml) {
-  const root = ensureModalRoot();
-  root.innerHTML = `
-    <div id="modal-backdrop" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:9998;display:flex;align-items:center;justify-content:center;padding:16px;">
-      <div style="background:#fff;border-radius:12px;max-width:960px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.2);">
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #e2e8f0;">
-          <h3 style="margin:0;font-size:16px;color:#0f172a;">${title}</h3>
-          <button type="button" onclick="closeModal()" style="border:none;background:transparent;font-size:20px;cursor:pointer;line-height:1;">×</button>
-        </div>
-        <div id="modal-body" style="padding:16px 18px;overflow:auto;flex:1;">${bodyHtml}</div>
-        <div id="modal-footer" style="padding:12px 18px;border-top:1px solid #e2e8f0;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">${footerHtml || ""}</div>
-      </div>
-    </div>`;
-}
-
-// ----- Dictionary -----
 async function openDictionaryModal() {
   if (!accessToken) {
     alert("Please login first");
@@ -1300,9 +1231,33 @@ async function openTemplateModal() {
 function renderTemplateUI(components) {
   let html = `
     <p style="margin:0 0 12px;font-size:13px;color:#64748b;">
-      Select components and fields for the template. Each component appears <strong>once</strong> —
-      use the <strong>Instance</strong> column in Excel when the same component appears multiple times on a page.
-    </p>`;
+      Choose bulk sheets and components. <strong>Add</strong> sheets create new components on a page;
+      sheets without "Add" are for <strong>updating</strong> components already on the page.
+      Use the <strong>Instance</strong> column in update sheets when the same component appears multiple times.
+    </p>
+    <div style="margin:0 0 14px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#0f172a;">Include in Excel</div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px;cursor:pointer;">
+        <input type="checkbox" id="tpl-include-assets" checked /> Assets sheet (Source Path → Target DAM path)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px;cursor:pointer;">
+        <input type="checkbox" id="tpl-include-pages" checked onchange="onTplIncludePagesChange()" /> Pages sheet (create pages)
+      </label>
+      <div id="tpl-pages-options" style="margin:4px 0 8px 24px;">
+        <label style="font-size:12px;color:#64748b;display:block;margin-bottom:4px;">Default template name for Pages sheet</label>
+        <select id="tpl-default-template" style="width:100%;max-width:360px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;">
+          <option value="">Loading templates...</option>
+        </select>
+        <p style="margin:4px 0 0;font-size:11px;color:#94a3b8;">CA can still change Create (Y/N) and Template Name in Excel later.</p>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+        <input type="checkbox" id="tpl-include-add" checked /> Components <strong>Add</strong> sheets (new components on a page)
+      </label>
+      <p style="margin:8px 0 0;font-size:12px;color:#64748b;">
+        Page Properties / SEO comes only from the selection under <strong>Components &amp; fields</strong> below (choose the fields you need — no separate SEO checkbox).
+      </p>
+    </div>
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#0f172a;">Components & fields</div>`;
 
   if (!components.length) {
     html += `<p>No components available. Open pages in the tool so components are stored in the dictionary/catalog first.</p>`;
@@ -1338,6 +1293,8 @@ function renderTemplateUI(components) {
   window.__tplComponents = components;
 
   document.getElementById("modal-body").innerHTML = html;
+  loadTplTemplates();
+  onTplIncludePagesChange();
   document.getElementById("modal-footer").innerHTML = `
     <button type="button" onclick="closeModal()" style="padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">Cancel</button>
     <button type="button" onclick="previewExcelTemplate()" style="padding:8px 14px;border:1px solid #2563eb;border-radius:6px;background:#eff6ff;color:#1d4ed8;cursor:pointer;font-weight:500;">Preview</button>
@@ -1518,13 +1475,32 @@ async function generateExcelTemplate() {
   if (name === null) return; // cancelled
 
   try {
+    const include_assets = !!(document.getElementById("tpl-include-assets") || {}).checked;
+    const include_pages = !!(document.getElementById("tpl-include-pages") || {}).checked;
+    const include_components_add = !!(document.getElementById("tpl-include-add") || {}).checked;
+    const default_template_name = ((document.getElementById("tpl-default-template") || {}).value || "Content Page").trim();
+    // SEO sheet only if page_properties is among selections (with fields)
+    const include_seo = selections.some(
+      (s) => (s.resourceType || "") === "page_properties" || (s.label || "").toLowerCase().includes("page properties")
+    );
+
     const res = await fetch(`${API_BASE}/api/excel/generate-template`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ include_seo: false, selections, name: name || defaultName }),
+      body: JSON.stringify({
+        selections,
+        name: name || defaultName,
+        include_seo,
+        include_assets,
+        include_pages,
+        include_components_add,
+        default_template_name,
+        template_parent_path: "/content/we-retail/us/en",
+        allowed_components_page_path: "/content/we-retail/us/en/men",
+      }),
     });
     if (!res.ok) {
       let msg = "Template generation failed";
@@ -1533,6 +1509,11 @@ async function generateExcelTemplate() {
         msg = err.message || err.detail || msg;
       } catch (_) {}
       throw new Error(msg);
+    }
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("application/json")) {
+      const err = await res.json();
+      throw new Error(err.message || err.detail || "Template generation failed");
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -2015,3 +1996,483 @@ if (document.readyState === "loading") {
 } else {
   setTimeout(initCollapsibleSections, 0);
 }
+
+
+// ========== PAGE CREATION (path → plan → folder/page + template → create) ==========
+
+let __pagePlanData = null;
+
+function ensurePageCreateSection() {
+  if (document.getElementById("page-create-card")) return;
+
+  const card = document.createElement("div");
+  card.id = "page-create-card";
+  card.className = "card collapsible-section";
+  card.setAttribute("data-collapsible", "true");
+  card.style.cssText = "margin:16px 0;padding:18px 20px;background:#fff;border-radius:12px;border:1px solid #e2e8f0;box-shadow:0 1px 2px rgba(0,0,0,.04);";
+  card.innerHTML = `
+    <div class="section-header" style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+      <h3 style="margin:0;font-size:16px;font-weight:600;color:#0f172a;">Page Creation</h3>
+    </div>
+    <div class="section-body">
+      <p style="margin:0 0 12px;font-size:13px;color:#64748b;">
+        Enter the full target page path. The tool will show missing parents — choose <strong>Folder</strong> or <strong>Page</strong> (with template) for each, then create.
+      </p>
+      <label style="font-size:13px;font-weight:500;display:block;margin-bottom:4px;">Target page path</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <input id="page-create-path" type="text" placeholder="/content/we-retail/us/en/men/test"
+          style="flex:1;min-width:220px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;" />
+        <button type="button" onclick="loadPageCreatePlan()"
+          style="padding:8px 14px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;">
+          Get Plan
+        </button>
+      </div>
+      <p id="page-create-message" class="message" style="font-size:13px;margin:8px 0;"></p>
+      <div id="page-create-plan" style="display:none;"></div>
+    </div>
+  `;
+
+  const host =
+    document.getElementById("app-section") ||
+    document.getElementById("page-path-card")?.parentElement ||
+    document.body;
+  // Insert after bulk update / catalog if present, else append
+  const after =
+    document.getElementById("catalog-list")?.closest(".card") ||
+    document.querySelector("[id*='excel']") ||
+    null;
+  if (after && after.parentElement) {
+    after.parentElement.insertBefore(card, after.nextSibling);
+  } else {
+    host.appendChild(card);
+  }
+}
+
+function setPageCreateMsg(text, ok) {
+  const el = document.getElementById("page-create-message");
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = ok ? "#15803d" : "#b91c1c";
+}
+
+async function loadPageCreatePlan() {
+  ensurePageCreateSection();
+  const pathInput = document.getElementById("page-create-path");
+  const planEl = document.getElementById("page-create-plan");
+  const target = (pathInput?.value || "").trim();
+  if (!target) {
+    setPageCreateMsg("Enter a target page path (e.g. /content/we-retail/us/en/men/test)", false);
+    return;
+  }
+  if (!accessToken) {
+    setPageCreateMsg("Please login first", false);
+    return;
+  }
+
+  setPageCreateMsg("Loading plan...", true);
+  planEl.style.display = "none";
+  planEl.innerHTML = "";
+
+  try {
+    const res = await fetch(`${API_BASE}/api/page/plan`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ target_path: target }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") {
+      throw new Error(data.message || data.detail || "Plan failed");
+    }
+
+    __pagePlanData = data;
+
+    if (data.action === "none" || data.inspection?.all_ready) {
+      setPageCreateMsg("Entire path already exists — nothing to create.", true);
+      planEl.style.display = "block";
+      planEl.innerHTML = `<p style="font-size:13px;color:#64748b;">Path is ready: <code>${escapeDict(data.target_path || target)}</code></p>`;
+      return;
+    }
+
+    const plan = data.plan || [];
+    let html = `<div style="margin-top:8px;">`;
+    html += `<p style="font-size:13px;color:#64748b;margin-bottom:10px;">${escapeDict(data.message || "")}</p>`;
+
+    plan.forEach((step, idx) => {
+      if (step.action === "exists") {
+        html += `
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#f8fafc;">
+            <div style="font-size:13px;">
+              <span style="color:#15803d;font-weight:600;">Exists</span>
+              <code style="margin-left:8px;">${escapeDict(step.path)}</code>
+              <span style="color:#94a3b8;font-size:12px;margin-left:6px;">(${escapeDict(step.kind || "node")})</span>
+            </div>
+          </div>`;
+        return;
+      }
+
+      const isTarget = !!step.is_target_page;
+      const templates = step.templates || [];
+      const choices = step.choices || (isTarget ? ["page"] : ["page", "folder"]);
+      const defaultType = isTarget ? "page" : (choices.includes("folder") ? "folder" : "page");
+
+      html += `
+        <div class="page-plan-step" data-idx="${idx}" data-path="${escapeDict(step.path)}"
+          data-parent="${escapeDict(step.parent_path || "")}" data-segment="${escapeDict(step.segment || "")}"
+          style="border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;margin-bottom:10px;background:#f8fbff;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">
+            Create: <code>${escapeDict(step.path)}</code>
+            ${isTarget ? '<span style="margin-left:8px;font-size:11px;background:#dbeafe;color:#1d4ed8;padding:2px 8px;border-radius:99px;">Target page</span>' : ""}
+          </div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:8px;">${escapeDict(step.message || "")}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:8px;">
+            <span style="font-size:12px;font-weight:500;">Type:</span>
+            ${choices.map((c) => `
+              <label style="font-size:13px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="radio" name="page-type-${idx}" value="${c}"
+                  ${c === defaultType ? "checked" : ""}
+                  onchange="onPagePlanTypeChange(${idx})">
+                ${c === "page" ? "Page" : "Folder"}
+              </label>`).join("")}
+          </div>
+          <div id="page-plan-title-${idx}" style="margin-bottom:8px;">
+            <label style="font-size:12px;display:block;margin-bottom:4px;">Title</label>
+            <input type="text" class="page-plan-title" data-idx="${idx}"
+              value="${escapeDict((step.segment || "").replace(/-/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()))}"
+              style="width:100%;max-width:360px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;" />
+          </div>
+          <div id="page-plan-template-${idx}" style="display:${defaultType === "page" ? "block" : "none"};">
+            <label style="font-size:12px;display:block;margin-bottom:4px;">Template ${isTarget ? "(required)" : ""}</label>
+            <select class="page-plan-template" data-idx="${idx}"
+              style="width:100%;max-width:480px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;">
+              <option value="">— Select template —</option>
+              ${templates.map((t) => `
+                <option value="${escapeDict(t.path)}">${escapeDict(t.title || t.name || t.path)} (${escapeDict(t.path)})</option>
+              `).join("")}
+            </select>
+            ${templates.length ? "" : `<p style="font-size:12px;color:#b45309;margin:6px 0 0;">No templates listed for parent. Check parent exists and has allowed templates.</p>`}
+          </div>
+        </div>`;
+    });
+
+    html += `
+      <button type="button" onclick="executePageCreate()"
+        style="margin-top:8px;padding:10px 16px;background:#0f766e;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;">
+        Create path
+      </button>
+    </div>`;
+
+    planEl.innerHTML = html;
+    planEl.style.display = "block";
+    setPageCreateMsg(`Plan ready — ${plan.filter((p) => p.action === "create").length} segment(s) to create.`, true);
+  } catch (e) {
+    setPageCreateMsg(e.message || String(e), false);
+    console.error(e);
+  }
+}
+
+function onPagePlanTypeChange(idx) {
+  const radios = document.querySelectorAll(`input[name="page-type-${idx}"]`);
+  let type = "page";
+  radios.forEach((r) => { if (r.checked) type = r.value; });
+  const tplBox = document.getElementById(`page-plan-template-${idx}`);
+  if (tplBox) tplBox.style.display = type === "page" ? "block" : "none";
+}
+
+async function executePageCreate() {
+  const pathInput = document.getElementById("page-create-path");
+  const target = (pathInput?.value || "").trim();
+  if (!target || !__pagePlanData) {
+    setPageCreateMsg("Load a plan first", false);
+    return;
+  }
+
+  const steps = [];
+  const rows = document.querySelectorAll(".page-plan-step");
+  for (const row of rows) {
+    const idx = row.getAttribute("data-idx");
+    const path = row.getAttribute("data-path");
+    let type = "page";
+    row.querySelectorAll(`input[name="page-type-${idx}"]`).forEach((r) => {
+      if (r.checked) type = r.value;
+    });
+    const titleEl = row.querySelector(`.page-plan-title[data-idx="${idx}"]`);
+    const title = (titleEl?.value || "").trim();
+    const tplEl = row.querySelector(`.page-plan-template[data-idx="${idx}"]`);
+    const template = (tplEl?.value || "").trim();
+
+    if (type === "page" && !template) {
+      setPageCreateMsg(`Select a template for: ${path}`, false);
+      return;
+    }
+    steps.push({
+      path,
+      type,
+      title: title || undefined,
+      template: type === "page" ? template : undefined,
+    });
+  }
+
+  if (!steps.length) {
+    setPageCreateMsg("Nothing to create", true);
+    return;
+  }
+
+  setPageCreateMsg("Creating...", true);
+  try {
+    const res = await fetch(`${API_BASE}/api/page/create`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        target_path: target,
+        steps,
+        default_title: steps[steps.length - 1]?.title,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") {
+      throw new Error(data.message || data.detail || "Create failed");
+    }
+
+    let detail = (data.results || [])
+      .map((r) => `${r.status === "success" || r.created ? "✅" : r.status === "skipped" ? "⏭️" : "❌"} ${r.path || ""} ${r.message || r.kind || ""}`)
+      .join("\n");
+
+    setPageCreateMsg(data.message || "Done", data.status === "success");
+    const planEl = document.getElementById("page-create-plan");
+    if (planEl) {
+      planEl.innerHTML =
+        `<pre style="font-size:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;white-space:pre-wrap;">${escapeDict(detail || JSON.stringify(data, null, 2))}</pre>` +
+        `<button type="button" onclick="loadPageCreatePlan()" style="margin-top:10px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;">Refresh plan</button>`;
+    }
+  } catch (e) {
+    setPageCreateMsg(e.message || String(e), false);
+    console.error(e);
+  }
+}
+
+// Mount section after login / on load
+function bootPageCreateUI() {
+  try {
+    ensurePageCreateSection();
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bootPageCreateUI);
+} else {
+  setTimeout(bootPageCreateUI, 50);
+}
+
+
+// ========== DAM ASSET UPLOAD (local → AEM DAM) ==========
+
+function ensureDamUploadSection() {
+  if (document.getElementById("dam-upload-card")) return;
+
+  const card = document.createElement("div");
+  card.id = "dam-upload-card";
+  card.className = "card collapsible-section";
+  card.setAttribute("data-collapsible", "true");
+  card.style.cssText = "margin:16px 0;padding:18px 20px;background:#fff;border-radius:12px;border:1px solid #e2e8f0;box-shadow:0 1px 2px rgba(0,0,0,.04);";
+  card.innerHTML = `
+    <div class="section-header" style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+      <h3 style="margin:0;font-size:16px;font-weight:600;color:#0f172a;">DAM Asset Upload</h3>
+    </div>
+    <div class="section-body">
+      <p style="margin:0 0 12px;font-size:13px;color:#64748b;">
+        Upload images from a local page folder (<strong>Desktop / Mobile / Tablet</strong>) into AEM DAM.
+        Folders are created under the page DAM path when confirmed. Size limits: Desktop &lt;300KB, Tablet &lt;200KB, Mobile &lt;100KB (+5KB tolerance).
+      </p>
+      <label style="font-size:13px;font-weight:500;display:block;margin-bottom:4px;">DAM page path</label>
+      <input id="dam-page-path" type="text" placeholder="/content/dam/we-retail/en/men"
+        style="width:100%;max-width:520px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-bottom:10px;" />
+      <label style="font-size:13px;font-weight:500;display:block;margin-bottom:4px;">Local page folder</label>
+      <input id="dam-local-folder" type="text" placeholder="C:/Users/.../test-assets/men"
+        style="width:100%;max-width:520px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;margin-bottom:12px;" />
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+        <button type="button" onclick="damInspect()" style="padding:8px 14px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;font-weight:500;">Inspect DAM folders</button>
+        <button type="button" onclick="damEnsureFolders()" style="padding:8px 14px;background:#fff;border:1px solid #99f6e4;color:#0f766e;border-radius:8px;cursor:pointer;font-weight:500;">Create folders</button>
+        <button type="button" onclick="damScanLocal()" style="padding:8px 14px;background:#fff;border:1px solid #bfdbfe;color:#1d4ed8;border-radius:8px;cursor:pointer;font-weight:500;">Scan local</button>
+        <button type="button" onclick="damUploadLocal()" style="padding:8px 14px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;">Upload to DAM</button>
+      </div>
+      <p id="dam-message" style="font-size:13px;margin:8px 0;"></p>
+      <div id="dam-result" style="display:none;margin-top:8px;"></div>
+    </div>
+  `;
+
+  const host = document.getElementById("app-section") || document.body;
+  const pageCard = document.getElementById("page-create-card");
+  if (pageCard && pageCard.parentElement) {
+    pageCard.parentElement.insertBefore(card, pageCard);
+  } else {
+    host.appendChild(card);
+  }
+}
+
+function setDamMsg(text, ok) {
+  const el = document.getElementById("dam-message");
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = ok ? "#15803d" : "#b91c1c";
+}
+
+function showDamResult(obj) {
+  const box = document.getElementById("dam-result");
+  if (!box) return;
+  box.style.display = "block";
+  box.innerHTML = `<pre style="font-size:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;overflow:auto;max-height:360px;white-space:pre-wrap;">${escapeDict(JSON.stringify(obj, null, 2))}</pre>`;
+}
+
+async function damInspect() {
+  ensureDamUploadSection();
+  if (!accessToken) return setDamMsg("Please login first", false);
+  const pageDamPath = (document.getElementById("dam-page-path")?.value || "").trim();
+  if (!pageDamPath) return setDamMsg("Enter DAM page path", false);
+  setDamMsg("Inspecting...", true);
+  try {
+    const res = await fetch(`${API_BASE}/api/dam/inspect`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ page_dam_path: pageDamPath }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") throw new Error(data.message || data.detail || "Inspect failed");
+    setDamMsg(data.message || "Inspect done", true);
+    showDamResult(data);
+  } catch (e) {
+    setDamMsg(e.message || String(e), false);
+  }
+}
+
+async function damEnsureFolders() {
+  if (!accessToken) return setDamMsg("Please login first", false);
+  const pageDamPath = (document.getElementById("dam-page-path")?.value || "").trim();
+  if (!pageDamPath) return setDamMsg("Enter DAM page path", false);
+  if (!confirm("Create missing DAM folders (including desktop/mobile/tablet) under:\n" + pageDamPath + "?")) return;
+  setDamMsg("Creating folders...", true);
+  try {
+    const res = await fetch(`${API_BASE}/api/dam/ensure-folders`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ page_dam_path: pageDamPath, confirm_create: true }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") throw new Error(data.message || data.detail || "Create folders failed");
+    setDamMsg(data.message || "Folders ready", data.status === "success" || data.status === "needs_confirmation");
+    showDamResult(data);
+  } catch (e) {
+    setDamMsg(e.message || String(e), false);
+  }
+}
+
+async function damScanLocal() {
+  if (!accessToken) return setDamMsg("Please login first", false);
+  const local = (document.getElementById("dam-local-folder")?.value || "").trim();
+  if (!local) return setDamMsg("Enter local page folder path", false);
+  setDamMsg("Scanning local folder...", true);
+  try {
+    const res = await fetch(`${API_BASE}/api/dam/scan-local`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ local_page_folder: local }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") throw new Error(data.message || data.detail || "Scan failed");
+    setDamMsg(data.message || "Scan done", true);
+    showDamResult(data);
+  } catch (e) {
+    setDamMsg(e.message || String(e), false);
+  }
+}
+
+async function damUploadLocal() {
+  if (!accessToken) return setDamMsg("Please login first", false);
+  const pageDamPath = (document.getElementById("dam-page-path")?.value || "").trim();
+  const local = (document.getElementById("dam-local-folder")?.value || "").trim();
+  if (!pageDamPath || !local) return setDamMsg("DAM path and local folder are required", false);
+  if (!confirm("Upload assets to DAM?\n" + pageDamPath + "\nfrom\n" + local)) return;
+  setDamMsg("Uploading (may take a while)...", true);
+  try {
+    const res = await fetch(`${API_BASE}/api/dam/upload-local`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page_dam_path: pageDamPath,
+        local_page_folder: local,
+        confirm_create_folders: true,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") throw new Error(data.message || data.detail || "Upload failed");
+    const s = data.summary || {};
+    setDamMsg(
+      `Upload finished — success: ${s.success || 0}, skipped: ${s.skipped || 0}, rejected size: ${s.rejected_size || 0}, errors: ${s.errors || 0}`,
+      data.status === "success" || data.status === "partial"
+    );
+    showDamResult(data);
+  } catch (e) {
+    setDamMsg(e.message || String(e), false);
+  }
+}
+
+function bootDamUploadUI() {
+  try { ensureDamUploadSection(); } catch (e) { console.warn(e); }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bootDamUploadUI);
+} else {
+  setTimeout(bootDamUploadUI, 60);
+}
+
+
+function onTplIncludePagesChange() {
+  const box = document.getElementById("tpl-pages-options");
+  const cb = document.getElementById("tpl-include-pages");
+  if (box && cb) box.style.display = cb.checked ? "block" : "none";
+}
+
+async function loadTplTemplates() {
+  const sel = document.getElementById("tpl-default-template");
+  if (!sel || !accessToken) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/page/templates`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ parent_path: "/content/we-retail/us/en" }),
+    });
+    const data = await res.json();
+    const templates = (data.templates || []).filter(
+      (t) => !t["jcr:primaryType"] || t["jcr:primaryType"] === "cq:Template"
+    );
+    sel.innerHTML = "";
+    if (!templates.length) {
+      sel.innerHTML = '<option value="Content Page">Content Page</option>';
+      return;
+    }
+    templates.forEach((t) => {
+      const title = t.title || t.name || t.path;
+      const opt = document.createElement("option");
+      opt.value = title;
+      opt.textContent = title;
+      if ((t.name || "").toLowerCase() === "content-page" || (title || "").toLowerCase() === "content page") {
+        opt.selected = true;
+      }
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    sel.innerHTML = '<option value="Content Page">Content Page</option>';
+  }
+}
+

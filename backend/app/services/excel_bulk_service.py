@@ -69,8 +69,22 @@ def parse_workbook(content: bytes) -> dict:
     seen_comp = {}
 
     for sheet_name in wb.sheetnames:
-        if sheet_name.lower() in ("instructions", "howto", "readme"):
+        sn = _norm(sheet_name)
+        # Skip non-update sheets (handled by other bulk steps)
+        if sn in (
+            "instructions",
+            "howto",
+            "how to use",
+            "readme",
+            "assets",
+            "asset",
+            "pages",
+            "page",
+            "page creation",
+        ):
             continue
+        if sn.startswith("add ") or sheet_name.strip().lower().startswith("add "):
+            continue  # component ADD — separate pipeline
         ws = wb[sheet_name]
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -590,4 +604,205 @@ def apply_excel(content: bytes, performed_by: str = "system") -> dict:
             "skipped_count": res.get("skipped_count", 0),
             "partial_count": res.get("partial_count", 0),
         },
+    }
+
+
+# =============================================================================
+# Full bulk orchestration: Assets → Pages → Add components → Update
+# =============================================================================
+
+def _is_add_sheet(name: str) -> bool:
+    return (name or "").strip().lower().startswith("add ")
+
+
+def parse_add_sheets(content: bytes) -> dict:
+    """Parse 'Add *' sheets into component-add rows (CA component name + properties)."""
+    wb = load_workbook(io.BytesIO(content), data_only=True)
+    dictionary = load_dictionary()
+    rows = []
+    errors = []
+
+    for sheet_name in wb.sheetnames:
+        if not _is_add_sheet(sheet_name):
+            continue
+        # "Add Hero Image" → default component name Hero Image
+        default_name = sheet_name.strip()[4:].strip()
+        ws = wb[sheet_name]
+        data = list(ws.iter_rows(values_only=True))
+        if not data:
+            continue
+        headers = [str(h).strip() if h is not None else "" for h in data[0]]
+        header_map = {}
+        for idx, h in enumerate(headers):
+            if not h:
+                continue
+            hl = _norm(h)
+            if hl in ("page path", "pagepath", "path"):
+                header_map[idx] = "__page_path__"
+            elif hl in ("component name", "component", "name"):
+                header_map[idx] = "__component_name__"
+            else:
+                # resolve via dictionary using default component leaf
+                resolved = None
+                for rt, meta in (dictionary or {}).items():
+                    if not isinstance(meta, dict):
+                        continue
+                    if _norm(meta.get("label") or "") == _norm(default_name) or rt.split("/")[-1].lower() == _norm(default_name).replace(" ", ""):
+                        resolved = resolve_label(rt, h) or None
+                        if not resolved:
+                            fields = meta.get("fields") or {}
+                            for fn, aliases in fields.items():
+                                alist = aliases if isinstance(aliases, list) else [str(aliases)]
+                                if _norm(fn) == hl or any(_norm(a) == hl for a in alist):
+                                    resolved = fn
+                                    break
+                        if resolved:
+                            break
+                header_map[idx] = resolved or h
+
+        for r_i, row in enumerate(data[1:], start=2):
+            if not row or all(c is None or str(c).strip() == "" for c in row):
+                continue
+            page_path = None
+            comp_name = default_name
+            props = {}
+            for idx, key in header_map.items():
+                if idx >= len(row):
+                    continue
+                val = row[idx]
+                if val is None or str(val).strip() == "":
+                    continue  # skip blank cells
+                if key == "__page_path__":
+                    page_path = str(val).strip()
+                elif key == "__component_name__":
+                    comp_name = str(val).strip()
+                else:
+                    props[key] = val if not isinstance(val, str) else val.strip()
+            if not page_path:
+                errors.append(f"{sheet_name} row {r_i}: missing Page Path")
+                continue
+            rows.append({
+                "sheet": sheet_name,
+                "excel_row": r_i,
+                "page_path": page_path.rstrip("/"),
+                "component": comp_name,
+                "properties": props,
+            })
+
+    return {"status": "success", "rows": rows, "errors": errors}
+
+
+def orchestrate_preview(content: bytes) -> dict:
+    """
+    Preview full bulk workbook in order (no writes).
+    """
+    from backend.app.services.asset_bulk_service import plan_asset_uploads
+    from backend.app.services.page_bulk_service import preview_pages
+
+    assets = plan_asset_uploads(content)
+    pages = preview_pages(content)
+    adds = parse_add_sheets(content)
+    updates = preview_excel(content)
+
+    return {
+        "status": "success",
+        "message": "Full bulk preview (Assets → Pages → Add → Update)",
+        "assets": assets,
+        "pages": pages,
+        "components_add": adds,
+        "updates": updates,
+    }
+
+
+def orchestrate_apply(content: bytes, performed_by: str = "system") -> dict:
+    """
+    Apply full bulk workbook in order.
+    Continues past per-row failures; blank fields already skipped in parsers.
+    """
+    from backend.app.services.asset_bulk_service import plan_asset_uploads
+    from backend.app.services.page_bulk_service import apply_pages, preview_pages
+    from backend.app.services.dam_service import DamService
+    from backend.app.services.component_add_service import ComponentAddService
+    from collections import OrderedDict
+
+    results = {
+        "assets": None,
+        "pages": None,
+        "components_add": None,
+        "updates": None,
+    }
+
+    # 1) Assets
+    try:
+        plan = plan_asset_uploads(content)
+        dam = DamService()
+        asset_results = []
+        if plan.get("status") == "success":
+            for p in plan.get("plans") or []:
+                if p.get("errors"):
+                    asset_results.append({"row": p.get("excel_row"), "status": "error", "errors": p["errors"]})
+                    continue
+                up = dam.upload_from_local(
+                    page_dam_path=p["target_path"],
+                    local_page_folder=p["source_path"],
+                    confirm_create_folders=True,
+                )
+                asset_results.append({"row": p.get("excel_row"), "upload": up})
+            results["assets"] = {"status": "success", "results": asset_results, "plan_summary": plan.get("summary")}
+        else:
+            results["assets"] = plan
+    except Exception as e:
+        results["assets"] = {"status": "error", "message": str(e)}
+
+    # 2) Pages
+    try:
+        results["pages"] = apply_pages(content, performed_by=performed_by)
+    except Exception as e:
+        results["pages"] = {"status": "error", "message": str(e)}
+
+    # 3) Component ADD — only on pages that exist; skip others
+    try:
+        from backend.app.services.page_service import PageService
+        adds = parse_add_sheets(content)
+        by_page = OrderedDict()
+        for row in adds.get("rows") or []:
+            by_page.setdefault(row["page_path"], []).append(row)
+        add_svc = ComponentAddService()
+        ps = PageService()
+        add_results = []
+        for page_path, rows in by_page.items():
+            if not ps.path_exists(page_path):
+                add_results.append({
+                    "page_path": page_path,
+                    "status": "skipped",
+                    "message": "Page does not exist — skipped component add (create page first)",
+                    "components_requested": [r.get("component") for r in rows],
+                })
+                continue
+            components = [
+                {"component": r["component"], "properties": r.get("properties") or {}}
+                for r in rows
+            ]
+            r = add_svc.apply_add(page_path, components)
+            add_results.append({"page_path": page_path, "status": r.get("status"), "result": r})
+        any_ok = any(x.get("status") == "success" for x in add_results)
+        any_err = any(x.get("status") not in ("success", "skipped") for x in add_results)
+        results["components_add"] = {
+            "status": "success" if any_ok and not any_err else ("partial" if any_ok else "error"),
+            "pages": add_results,
+            "parse_errors": adds.get("errors") or [],
+        }
+    except Exception as e:
+        results["components_add"] = {"status": "error", "message": str(e)}
+
+    # 4) SEO + component UPDATE
+    try:
+        results["updates"] = apply_excel(content, performed_by=performed_by)
+    except Exception as e:
+        results["updates"] = {"status": "error", "message": str(e)}
+
+    return {
+        "status": "success",
+        "message": "Full bulk apply finished (see each stage for details)",
+        "stages": results,
     }

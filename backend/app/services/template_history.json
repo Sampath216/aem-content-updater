@@ -1,6 +1,151 @@
 {
   "templates": [
     {
+      "id": "tpl_20260815052643813183",
+      "name": "Template 2026-08-15 05:26",
+      "created_at": "2026-08-15T05:26:43.813111",
+      "last_used": "2026-08-15T05:26:43.813111",
+      "use_count": 1,
+      "include_seo": true,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "page_properties",
+          "label": "Page Properties / SEO",
+          "fields": [
+            "jcr:title",
+            "pageTitle",
+            "navTitle",
+            "subtitle",
+            "jcr:description",
+            "cq:canonicalUrl"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/button",
+          "label": "button",
+          "fields": [
+            "label",
+            "linkTo"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/heroimage",
+          "label": "Hero Image",
+          "fields": [
+            "fileReference",
+            "heading",
+            "title",
+            "buttonLabel",
+            "buttonLinkTo",
+            "useFullWidth"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/title",
+          "label": "Title",
+          "fields": [
+            "jcr:title",
+            "type",
+            "linkURL"
+          ]
+        }
+      ],
+      "fingerprint": "seo=1|page_properties:cq:canonicalUrl,jcr:description,jcr:title,navTitle,pageTitle,subtitle|weretail/components/content/button:label,linkTo|weretail/components/content/heroimage:buttonLabel,buttonLinkTo,fileReference,heading,title,useFullWidth|weretail/components/content/title:jcr:title,linkURL,type",
+      "summary": {
+        "component_count": 4,
+        "field_count": 17,
+        "labels": [
+          "Page Properties / SEO",
+          "button",
+          "Hero Image",
+          "Title"
+        ]
+      }
+    },
+    {
+      "id": "tpl_20260815043146964026",
+      "name": "Template 20260815_0441",
+      "created_at": "2026-08-15T04:31:46.963989",
+      "last_used": "2026-08-15T04:41:09.826749",
+      "use_count": 2,
+      "include_seo": true,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "weretail/components/content/title",
+          "label": "Title",
+          "fields": [
+            "jcr:title",
+            "type",
+            "linkURL"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/heroimage",
+          "label": "Hero Image",
+          "fields": [
+            "heading",
+            "title",
+            "buttonLabel",
+            "buttonLinkTo",
+            "fileReference",
+            "useFullWidth"
+          ]
+        }
+      ],
+      "fingerprint": "seo=1|weretail/components/content/heroimage:buttonLabel,buttonLinkTo,fileReference,heading,title,useFullWidth|weretail/components/content/title:jcr:title,linkURL,type",
+      "summary": {
+        "component_count": 2,
+        "field_count": 9,
+        "labels": [
+          "Title",
+          "Hero Image"
+        ]
+      }
+    },
+    {
+      "id": "tpl_20260814054924474610",
+      "name": "Template 2026-08-14 05:49",
+      "created_at": "2026-08-14T05:49:24.474454",
+      "last_used": "2026-08-14T05:49:24.474454",
+      "use_count": 1,
+      "include_seo": false,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "weretail/components/content/button",
+          "label": "button",
+          "fields": [
+            "cssClass",
+            "label",
+            "linkTo"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/heroimage",
+          "label": "Hero Image",
+          "fields": [
+            "fileReference",
+            "heading",
+            "title",
+            "buttonLabel",
+            "buttonLinkTo",
+            "useFullWidth"
+          ]
+        }
+      ],
+      "fingerprint": "seo=0|weretail/components/content/button:cssClass,label,linkTo|weretail/components/content/heroimage:buttonLabel,buttonLinkTo,fileReference,heading,title,useFullWidth",
+      "summary": {
+        "component_count": 2,
+        "field_count": 9,
+        "labels": [
+          "button",
+          "Hero Image"
+        ]
+      }
+    },
+    {
       "id": "tpl_20260813065241473065",
       "name": "Template 2026-08-13 06:52",
       "created_at": "2026-08-13T06:52:41.473006",
