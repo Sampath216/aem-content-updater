@@ -1,6 +1,42 @@
 {
   "templates": [
     {
+      "id": "tpl_20260816024738448646",
+      "name": "Template 2026-08-16 02:47",
+      "created_at": "2026-08-16T02:47:38.448600",
+      "last_used": "2026-08-16T02:47:38.448600",
+      "use_count": 1,
+      "include_seo": false,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "weretail/components/content/button",
+          "label": "button",
+          "fields": [
+            "label",
+            "linkTo"
+          ]
+        },
+        {
+          "resourceType": "weretail/components/content/title",
+          "label": "Title",
+          "fields": [
+            "jcr:title",
+            "type"
+          ]
+        }
+      ],
+      "fingerprint": "seo=0|weretail/components/content/button:label,linkTo|weretail/components/content/title:jcr:title,type",
+      "summary": {
+        "component_count": 2,
+        "field_count": 4,
+        "labels": [
+          "button",
+          "Title"
+        ]
+      }
+    },
+    {
       "id": "tpl_20260815052643813183",
       "name": "Template 2026-08-15 05:26",
       "created_at": "2026-08-15T05:26:43.813111",

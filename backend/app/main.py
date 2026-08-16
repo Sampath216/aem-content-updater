@@ -46,7 +46,7 @@ from backend.app.services.bulk_validation_service import build_validation_report
 from backend.app.services.bulk_session_service import mark_applied, clear_session, get_session
 from backend.app.services.validation_export_service import validation_report_to_xlsx
 from backend.app.services.excel_service import ExcelTemplateService
-from backend.app.services.excel_template_service import generate_template
+from backend.app.services.excel_template_service import generate_template, describe_template
 from backend.app.services.page_bulk_service import apply_pages, preview_pages
 from backend.app.services.page_service import PageService
 from backend.app.services.template_history_service import (
@@ -367,6 +367,37 @@ def api_sync_dictionary(payload: dict, current_user: User = Depends(get_current_
 # TEMPLATE HISTORY + GENERATE
 # =============================================================================
 
+
+@app.post("/api/excel/preview-template-structure")
+def api_preview_template_structure(payload: dict, current_user: User = Depends(get_current_user)):
+    """
+    Same inputs as generate-template; returns sheet names + headers from the real generator.
+    Frontend preview must use this so it never drifts from download.
+    """
+    selections = payload.get("selections") or []
+    include_seo = payload.get("include_seo", True)
+    include_assets = payload.get("include_assets", True)
+    include_pages = payload.get("include_pages", True)
+    include_add = payload.get("include_components_add", True)
+    include_update = payload.get("include_components_update", False)
+    if include_pages:
+        include_update = False
+        if include_add is None:
+            include_add = True
+    try:
+        return describe_template(
+            selections,
+            include_seo=include_seo,
+            include_assets=include_assets,
+            include_pages=include_pages,
+            include_components_add=include_add,
+            include_components_update=include_update,
+            default_template_name=payload.get("default_template_name") or "Content Page",
+        )
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 @app.post("/api/excel/generate-template")
 def api_generate_excel_template(payload: dict, current_user: User = Depends(get_current_user)):
     """
@@ -379,6 +410,11 @@ def api_generate_excel_template(payload: dict, current_user: User = Depends(get_
         include_assets = payload.get("include_assets", True)
         include_pages = payload.get("include_pages", True)
         include_add = payload.get("include_components_add", True)
+        include_update = payload.get("include_components_update", False)
+        # New pages → never generate Update/Instance sheets
+        if include_pages:
+            include_update = False
+            include_add = True  # new page always needs Add sheets for selected components
         name = payload.get("name") or f"Template {datetime.utcnow().strftime('%Y%m%d_%H%M')}"
 
         known = []
@@ -409,6 +445,7 @@ def api_generate_excel_template(payload: dict, current_user: User = Depends(get_
             include_assets=include_assets,
             include_pages=include_pages,
             include_components_add=include_add,
+            include_components_update=include_update,
             known_templates=known,
             allowed_components=allowed_for_ca,
             default_template_name=payload.get("default_template_name") or "Content Page",
@@ -609,20 +646,41 @@ async def excel_components_add_preview(
 
 @app.post("/api/excel/components-add/apply")
 async def excel_components_add_apply(
+    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Apply only Add * sheets — skips pages that do not exist."""
+    """Apply only Add * sheets — skips pages that do not exist.
+    Within the same page bulk session, rows already applied (same page+component+excel_row)
+    are skipped so re-apply after field fixes does not duplicate components.
+    """
     from collections import OrderedDict
     from backend.app.services.excel_bulk_service import parse_add_sheets
     from backend.app.services.component_add_service import ComponentAddService
     from backend.app.services.page_service import PageService
+    from backend.app.services.bulk_session_service import get_session
 
     content = await file.read()
+    sid = request.headers.get("X-Bulk-Session-Id") or ""
+    sess = get_session(sid or None) or {}
+    prev_adds = ((sess.get("snapshot") or {}).get("adds")) or {}
+
     adds = parse_add_sheets(content)
     by_page = OrderedDict()
+    skipped_session = []
     for row in adds.get("rows") or []:
+        key = f"add|{row.get('page_path')}|{row.get('component')}|{row.get('excel_row')}"
+        # Skip if this exact add row was already applied in this page session
+        if key in prev_adds:
+            skipped_session.append({
+                "page_path": row.get("page_path"),
+                "component": row.get("component"),
+                "excel_row": row.get("excel_row"),
+                "reason": "already_applied_in_session",
+            })
+            continue
         by_page.setdefault(row["page_path"], []).append(row)
+
     add_svc = ComponentAddService()
     ps = PageService()
     add_results = []
@@ -641,7 +699,18 @@ async def excel_components_add_apply(
         ]
         r = add_svc.apply_add(page_path, components)
         add_results.append({"page_path": page_path, "status": r.get("status"), "result": r})
-    return {"status": "success", "pages": add_results, "parse_errors": adds.get("errors") or []}
+
+    return {
+        "status": "success",
+        "pages": add_results,
+        "skipped_already_applied": skipped_session,
+        "message": (
+            f"Add apply done; skipped {len(skipped_session)} row(s) already applied in this session"
+            if skipped_session
+            else "Add apply done"
+        ),
+        "parse_errors": adds.get("errors") or [],
+    }
 
 
 @app.post("/api/excel/assets/preview")

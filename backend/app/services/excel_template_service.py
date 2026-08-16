@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
 from openpyxl.utils import get_column_letter
 
@@ -84,6 +84,7 @@ def generate_template(
     include_assets: bool = True,
     include_pages: bool = True,
     include_components_add: bool = True,
+    include_components_update: bool = False,
     known_templates: Optional[List[dict]] = None,
     allowed_components: Optional[List[dict]] = None,
     default_template_name: Optional[str] = None,
@@ -248,36 +249,46 @@ def generate_template(
         _empty_rows(ws, headers, thin, 6)
 
 
-    # 5. Components Add sheets
-    if include_components_add:
-        for sel in selections:
-            if not isinstance(sel, dict):
-                continue
-            rt = sel.get("resourceType") or ""
-            if rt == "page_properties" or "page properties" in (sel.get("label") or "").lower():
-                continue
-            label = str(sel.get("label") or (rt.split("/")[-1] if rt else "Component"))[:20]
-            ws = wb.create_sheet(_unique_sheet_name(wb, f"Add {label}"))
-            fields = sel.get("fields") or []
-            headers = ["Page Path", "Component Name"]
-            for fn in fields:
-                headers.append(_field_header(data, rt, str(fn)))
-            _style_header(ws, headers, header_fill, header_font, thin)
-            _empty_rows(ws, headers, thin, 6)
-            ws.cell(2, 1, "/content/we-retail/us/en/men/test")
-            ws.cell(2, 2, label)
-            for c in range(1, 3):
-                ws.cell(2, c).font = example_font
+    # 5. Components Add sheets — per selection include_add
+    for sel in selections:
+        if not isinstance(sel, dict):
+            continue
+        rt = sel.get("resourceType") or ""
+        if rt == "page_properties" or "page properties" in (sel.get("label") or "").lower():
+            continue
+        want_add = sel.get("include_add")
+        if want_add is None:
+            want_add = bool(include_components_add)
+        if include_pages and sel.get("include_add") is None:
+            want_add = True
+        if not want_add:
+            continue
+        label = str(sel.get("label") or (rt.split("/")[-1] if rt else "Component"))[:20]
+        ws = wb.create_sheet(_unique_sheet_name(wb, f"Add {label}"))
+        fields = sel.get("fields") or []
+        headers = ["Page Path", "Component Name"]
+        for fn in fields:
+            headers.append(_field_header(data, rt, str(fn)))
+        _style_header(ws, headers, header_fill, header_font, thin)
+        _empty_rows(ws, headers, thin, 6)
+        ws.cell(2, 1, "/content/we-retail/us/en/men/test")
+        ws.cell(2, 2, label)
+        for c in range(1, 3):
+            ws.cell(2, c).font = example_font
 
     # 6. Component UPDATE sheets
-    # Update sheets (Instance column): only for "update existing" workbooks.
-    # New-page flow (Pages + Add checked): components are Add-only — no Instance sheets.
-    if not (include_pages and include_components_add):
+    # Update sheets (Instance) — per selection include_update; never when include_pages
+    if not include_pages:
         for sel in selections:
             if not isinstance(sel, dict):
                 continue
             rt = sel.get("resourceType") or ""
             if rt == "page_properties" or "page properties" in (sel.get("label") or "").lower():
+                continue
+            want_upd = sel.get("include_update")
+            if want_upd is None:
+                want_upd = include_components_update
+            if not want_upd:
                 continue
             label = str(sel.get("label") or (rt.split("/")[-1] if rt else "Component"))[:28]
             ws = wb.create_sheet(_unique_sheet_name(wb, label))
@@ -294,3 +305,50 @@ def generate_template(
     if not raw.startswith(b"PK"):
         raise RuntimeError("Generated file is not a valid xlsx (missing ZIP header)")
     return raw
+
+
+def describe_template_from_bytes(content: bytes) -> dict:
+    """Inspect a generated workbook — same file CA downloads."""
+    wb = load_workbook(io.BytesIO(content), data_only=True)
+    sheets = []
+    for name in wb.sheetnames:
+        ws = wb[name]
+        headers = []
+        for cell in next(ws.iter_rows(min_row=1, max_row=1, values_only=True), []):
+            if cell is None:
+                break
+            headers.append(str(cell).strip())
+        sheets.append({"name": name, "headers": headers})
+    return {"status": "success", "sheet_count": len(sheets), "sheets": sheets}
+
+
+def describe_template(
+    selections: List[dict],
+    include_seo: bool = True,
+    include_assets: bool = True,
+    include_pages: bool = True,
+    include_components_add: bool = True,
+    include_components_update: bool = False,
+    known_templates: Optional[List[dict]] = None,
+    allowed_components: Optional[List[dict]] = None,
+    default_template_name: Optional[str] = None,
+) -> dict:
+    """
+    Build the real template in memory, then list sheets/headers.
+    Preview always matches download — no separate UI sheet list.
+    """
+    content = generate_template(
+        selections,
+        include_seo=include_seo,
+        include_assets=include_assets,
+        include_pages=include_pages,
+        include_components_add=include_components_add,
+        include_components_update=include_components_update,
+        known_templates=known_templates,
+        allowed_components=allowed_components,
+        default_template_name=default_template_name,
+    )
+    info = describe_template_from_bytes(content)
+    info["message"] = "Structure from the same generator as Create Template download"
+    return info
+

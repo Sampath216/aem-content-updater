@@ -1006,7 +1006,7 @@ async function applyExcel() {
         formData.append("file", lastExcelFile);
         const response = await fetch(API_BASE + step.endpoint, {
             method: "POST",
-            headers: { Authorization: "Bearer " + accessToken },
+            headers: bulkSessionHeaders(),
             body: formData,
         });
         let data = {};
@@ -1419,11 +1419,9 @@ function renderTemplateUI(components) {
         </select>
         <p style="margin:4px 0 0;font-size:11px;color:#94a3b8;">CA can still change Create (Y/N) and Template Name in Excel later.</p>
       </div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
-        <input type="checkbox" id="tpl-include-add" checked /> Components <strong>Add</strong> sheets (new components on a page)
-      </label>
       <p id="tpl-mode-hint" style="margin:8px 0 0;font-size:12px;color:#334155;line-height:1.45;">
-        <strong>Mode:</strong> Tick <em>Pages</em> for new-page work (components = Add sheets). Leave Pages unticked for update-only templates (Instance column).
+        <strong>Per component:</strong> After you tick a component on the left, choose <em>Add</em> and/or <em>Update</em> for that component only.
+        New pages → Add defaults on. Existing pages → Update defaults on. Page Properties / SEO still come from the list below.
       </p>
       <p style="margin:6px 0 0;font-size:12px;color:#64748b;">
         Page Properties / SEO comes only from the selection under <strong>Components &amp; fields</strong> below.
@@ -1436,13 +1434,25 @@ function renderTemplateUI(components) {
   }
 
   components.forEach((comp, ci) => {
+    const isPageProps = (comp.resourceType || "") === "page_properties";
     html += `
       <div class="tpl-comp" style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:12px;overflow:hidden;">
-        <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f8fafc;cursor:pointer;">
-          <input type="checkbox" class="tpl-comp-check" data-ci="${ci}" onchange="toggleTplComp(${ci}, this.checked)">
-          <strong style="font-size:13px;">${escapeDict(comp.label || comp.resourceType)}</strong>
-          <span style="font-size:11px;color:#64748b;">${escapeDict(comp.resourceType)}</span>
-        </label>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f8fafc;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1;min-width:180px;">
+            <input type="checkbox" class="tpl-comp-check" data-ci="${ci}" onchange="toggleTplComp(${ci}, this.checked)">
+            <strong style="font-size:13px;">${escapeDict(comp.label || comp.resourceType)}</strong>
+            <span style="font-size:11px;color:#64748b;">${escapeDict(comp.resourceType)}</span>
+          </label>
+          <span id="tpl-mode-opts-${ci}" style="display:none;align-items:center;gap:12px;font-size:12px;">
+            ${isPageProps ? "" : `
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" class="tpl-comp-add" data-ci="${ci}"> Add
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;" class="tpl-comp-upd-label">
+              <input type="checkbox" class="tpl-comp-update" data-ci="${ci}"> Update
+            </label>`}
+          </span>
+        </div>
         <div id="tpl-fields-${ci}" style="display:none;padding:8px 12px 12px;border-top:1px solid #e2e8f0;">
           <label style="font-size:12px;color:#64748b;display:flex;align-items:center;gap:6px;margin-bottom:8px;">
             <input type="checkbox" class="tpl-select-all" data-ci="${ci}" onchange="toggleAllTplFields(${ci}, this.checked)" checked>
@@ -1477,21 +1487,33 @@ function renderTemplateUI(components) {
 function collectTemplateSelections() {
   const components = window.__tplComponents || [];
   const selections = [];
+  const newPage = isTplNewPageMode();
   document.querySelectorAll(".tpl-comp-check:checked").forEach((cb) => {
     const ci = parseInt(cb.getAttribute("data-ci"), 10);
     const comp = components[ci];
     if (!comp) return;
     const fields = [];
-    document.querySelectorAll(`.tpl-field-check[data-ci="${ci}"]:checked`).forEach((f) => {
+    document.querySelectorAll('.tpl-field-check[data-ci="' + ci + '"]:checked').forEach((f) => {
       fields.push(f.getAttribute("data-fn"));
     });
-    if (fields.length) {
-      selections.push({
-        resourceType: comp.resourceType,
-        label: comp.label || comp.resourceType,
-        fields,
-      });
+    if (!fields.length) return;
+    const isPP = (comp.resourceType || "") === "page_properties";
+    const addEl = document.querySelector('.tpl-comp-add[data-ci="' + ci + '"]');
+    const updEl = document.querySelector('.tpl-comp-update[data-ci="' + ci + '"]');
+    let include_add = isPP ? false : !!(addEl && addEl.checked);
+    let include_update = isPP ? false : !!(updEl && updEl.checked);
+    if (newPage) {
+      include_add = isPP ? false : true;
+      include_update = false;
     }
+    // page properties always SEO sheet via include_seo logic
+    selections.push({
+      resourceType: comp.resourceType,
+      label: comp.label || comp.resourceType,
+      fields,
+      include_add: isPP ? false : include_add,
+      include_update: isPP ? false : include_update,
+    });
   });
   return selections;
 }
@@ -1503,30 +1525,23 @@ function preferredLabelForField(comp, fieldName) {
   return fieldName;
 }
 
-function previewExcelTemplate() {
+async function previewExcelTemplate() {
   const selections = collectTemplateSelections();
   if (!selections.length) {
-    alert("Select at least one component with fields");
+    alert("Select at least one component with fields, and tick Add and/or Update on that component.");
     return;
   }
-  const components = window.__tplComponents || [];
+  if (!accessToken) {
+    alert("Please log in first.");
+    return;
+  }
 
-  // Excel-like preview: sheet tabs + grid
-  let html = `
-    <div style="font-size:13px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
-        <strong>Excel preview</strong>
-        <span style="font-size:12px;color:#64748b;">Same layout as the file you will download</span>
-      </div>
-      <div id="xlsx-preview-tabs" style="display:flex;gap:4px;flex-wrap:wrap;border-bottom:2px solid #e2e8f0;margin-bottom:0;padding-bottom:0;"></div>
-      <div id="xlsx-preview-sheets" style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;overflow:auto;max-height:360px;background:#fff;"></div>
-      <p style="color:#64748b;font-size:12px;margin:10px 0 0;line-height:1.45;">
-        <strong>How to fill:</strong> Checkbox = <code>true</code>/<code>false</code>.
-        Dropdown = option value (e.g. <code>h1</code>).
-        Multifield = items separated by <code>|</code>.
-        Actions = <code>/path::Label | /path2::Label2</code>.
-      </p>
-    </div>`;
+  const include_assets = !!(document.getElementById("tpl-include-assets") || {}).checked;
+  const include_pages = !!(document.getElementById("tpl-include-pages") || {}).checked;
+  const include_components_add = selections.some((s) => s.include_add);
+  const include_components_update = !include_pages && selections.some((s) => s.include_update);
+  const include_seo = selections.some((s) => s.resourceType === "page_properties");
+  const default_template_name = ((document.getElementById("tpl-default-template") || {}).value || "Content Page").trim();
 
   const body = document.getElementById("modal-body");
   let prev = document.getElementById("tpl-preview-box");
@@ -1536,86 +1551,126 @@ function previewExcelTemplate() {
     prev.style.cssText = "margin-bottom:14px;padding:12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;";
     body.insertBefore(prev, body.firstChild);
   }
-  prev.innerHTML = html;
+  prev.innerHTML = '<p style="font-size:13px;color:#64748b;">Loading preview from the same engine as Create Template…</p>';
 
-  const tabsEl = prev.querySelector("#xlsx-preview-tabs");
-  const sheetsEl = prev.querySelector("#xlsx-preview-sheets");
-
-  selections.forEach((sel, idx) => {
-    const comp = components.find((c) => c.resourceType === sel.resourceType) || {};
-    const colHeaders = ["Page Path", "Instance"].concat(
-      sel.fields.map((fn) => preferredLabelForField(comp, fn))
-    );
-
-    // Tab button
-    const tabBtn = document.createElement("button");
-    tabBtn.type = "button";
-    tabBtn.textContent = sel.label || sel.resourceType;
-    tabBtn.dataset.sheetIdx = String(idx);
-    tabBtn.style.cssText = `
-      padding:8px 14px;border:none;cursor:pointer;font-size:12px;font-weight:500;
-      background:transparent;color:#64748b;border-bottom:2px solid transparent;margin-bottom:-2px;`;
-    tabsEl.appendChild(tabBtn);
-
-    // Sheet grid
-    const sheet = document.createElement("div");
-    sheet.dataset.sheetIdx = String(idx);
-    sheet.style.display = idx === 0 ? "block" : "none";
-    sheet.style.padding = "0";
-
-    let table = `<table style="border-collapse:collapse;width:max-content;min-width:100%;font-size:12px;">
-      <thead><tr>`;
-    colHeaders.forEach((h) => {
-      table += `<th style="
-        background:#1e3a5f;color:#fff;font-weight:600;text-align:left;
-        padding:8px 12px;border:1px solid #0f2744;white-space:nowrap;position:sticky;top:0;">${escapeDict(h)}</th>`;
+  try {
+    const res = await fetch(API_BASE + "/api/excel/preview-template-structure", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + accessToken,
+      },
+      body: JSON.stringify({
+        selections,
+        include_seo,
+        include_assets,
+        include_pages,
+        include_components_add,
+        include_components_update,
+        default_template_name,
+      }),
     });
-    table += `</tr></thead><tbody>`;
-
-    // 5 empty data rows like Excel template
-    for (let r = 0; r < 5; r++) {
-      table += `<tr>`;
-      colHeaders.forEach((h, c) => {
-        // Instance only on first empty example row; CA fills 1,2,3... as needed
-        const placeholder = (c === 1 && r === 0) ? "1" : "";
-        table += `<td style="
-          padding:8px 12px;border:1px solid #e2e8f0;min-width:110px;height:32px;
-          background:${r % 2 === 0 ? "#fff" : "#f8fafc"};color:#94a3b8;">${placeholder}</td>`;
-      });
-      table += `</tr>`;
+    const data = await res.json();
+    if (!res.ok || data.status === "error") {
+      throw new Error(data.message || data.detail || "Preview failed");
     }
-    table += `</tbody></table>`;
-    sheet.innerHTML = table;
-    sheetsEl.appendChild(sheet);
-
-    tabBtn.onclick = () => {
-      tabsEl.querySelectorAll("button").forEach((b) => {
-        b.style.color = "#64748b";
-        b.style.borderBottomColor = "transparent";
-        b.style.fontWeight = "500";
-      });
-      tabBtn.style.color = "#2563eb";
-      tabBtn.style.borderBottomColor = "#2563eb";
-      tabBtn.style.fontWeight = "600";
-      sheetsEl.querySelectorAll("[data-sheet-idx]").forEach((s) => {
-        s.style.display = s.dataset.sheetIdx === String(idx) ? "block" : "none";
-      });
-    };
-
-    if (idx === 0) {
-      tabBtn.style.color = "#2563eb";
-      tabBtn.style.borderBottomColor = "#2563eb";
-      tabBtn.style.fontWeight = "600";
+    const sheets = data.sheets || [];
+    if (!sheets.length) {
+      prev.innerHTML = '<p style="color:#b91c1c;font-size:13px;">No sheets generated. Tick Add and/or Update on selected components.</p>';
+      return;
     }
-  });
 
-  prev.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    prev.innerHTML =
+      '<div style="font-size:13px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">' +
+      "<strong>Excel preview</strong>" +
+      '<span style="font-size:12px;color:#64748b;">Built by the same generator as the download file</span></div>' +
+      '<div id="xlsx-preview-tabs" style="display:flex;gap:4px;flex-wrap:wrap;border-bottom:2px solid #e2e8f0;"></div>' +
+      '<div id="xlsx-preview-sheets" style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;overflow:auto;max-height:360px;background:#fff;"></div>' +
+      '<p style="color:#64748b;font-size:12px;margin:10px 0 0;">Sheet count: ' +
+      sheets.length +
+      " — Add sheets and Update sheets appear here automatically when selected.</p></div>";
+
+    const tabsEl = prev.querySelector("#xlsx-preview-tabs");
+    const sheetsEl = prev.querySelector("#xlsx-preview-sheets");
+
+    sheets.forEach((sh, idx) => {
+      const name = sh.name || "Sheet";
+      const headers = sh.headers || [];
+      const tabBtn = document.createElement("button");
+      tabBtn.type = "button";
+      tabBtn.textContent = name;
+      tabBtn.dataset.sheetIdx = String(idx);
+      tabBtn.style.cssText =
+        "padding:8px 14px;border:none;cursor:pointer;font-size:12px;font-weight:500;" +
+        "background:transparent;color:#64748b;border-bottom:2px solid transparent;margin-bottom:-2px;";
+      tabsEl.appendChild(tabBtn);
+
+      const sheet = document.createElement("div");
+      sheet.dataset.sheetIdx = String(idx);
+      sheet.style.display = idx === 0 ? "block" : "none";
+
+      let table =
+        '<table style="border-collapse:collapse;width:max-content;min-width:100%;font-size:12px;"><thead><tr>';
+      headers.forEach((h) => {
+        table +=
+          '<th style="background:#1e3a5f;color:#fff;font-weight:600;text-align:left;padding:8px 12px;border:1px solid #0f2744;white-space:nowrap;">' +
+          escapeDict(String(h)) +
+          "</th>";
+      });
+      table += "</tr></thead><tbody>";
+      for (let r = 0; r < 4; r++) {
+        table += "<tr>";
+        headers.forEach(() => {
+          table +=
+            '<td style="padding:8px 12px;border:1px solid #e2e8f0;min-width:100px;height:30px;background:' +
+            (r % 2 === 0 ? "#fff" : "#f8fafc") +
+            ';"></td>';
+        });
+        table += "</tr>";
+      }
+      table += "</tbody></table>";
+      sheet.innerHTML = table;
+      sheetsEl.appendChild(sheet);
+
+      tabBtn.onclick = function () {
+        tabsEl.querySelectorAll("button").forEach((b) => {
+          b.style.color = "#64748b";
+          b.style.borderBottomColor = "transparent";
+          b.style.fontWeight = "500";
+        });
+        tabBtn.style.color = "#2563eb";
+        tabBtn.style.borderBottomColor = "#2563eb";
+        tabBtn.style.fontWeight = "600";
+        sheetsEl.querySelectorAll("[data-sheet-idx]").forEach((s) => {
+          s.style.display = s.dataset.sheetIdx === String(idx) ? "block" : "none";
+        });
+      };
+      if (idx === 0) {
+        tabBtn.style.color = "#2563eb";
+        tabBtn.style.borderBottomColor = "#2563eb";
+        tabBtn.style.fontWeight = "600";
+      }
+    });
+    prev.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    prev.innerHTML = '<p style="color:#b91c1c;font-size:13px;">' + escapeDict(e.message || String(e)) + "</p>";
+  }
 }
 
 
-function toggleTplComp(ci, on) {
-  const panel = document.getElementById(`tpl-fields-${ci}`);
-  if (panel) panel.style.display = on ? "block" : "none";
+function toggleTplComp(ci, checked) {
+  const box = document.getElementById("tpl-fields-" + ci);
+  if (box) box.style.display = checked ? "block" : "none";
+  const mode = document.getElementById("tpl-mode-opts-" + ci);
+  if (mode) mode.style.display = checked ? "inline-flex" : "none";
+  if (checked) applyDefaultAddUpdateForComp(ci);
+  else {
+    const a = document.querySelector('.tpl-comp-add[data-ci="' + ci + '"]');
+    const u = document.querySelector('.tpl-comp-update[data-ci="' + ci + '"]');
+    if (a) a.checked = false;
+    if (u) u.checked = false;
+  }
 }
 
 function toggleAllTplFields(ci, on) {
@@ -1649,7 +1704,9 @@ async function generateExcelTemplate() {
   try {
     const include_assets = !!(document.getElementById("tpl-include-assets") || {}).checked;
     const include_pages = !!(document.getElementById("tpl-include-pages") || {}).checked;
-    const include_components_add = !!(document.getElementById("tpl-include-add") || {}).checked;
+    // Per-component flags live on selections[]; derive aggregates for API
+    const include_components_add = selections.some((s) => s.include_add);
+    const include_components_update = !include_pages && selections.some((s) => s.include_update);
     const default_template_name = ((document.getElementById("tpl-default-template") || {}).value || "Content Page").trim();
     // SEO sheet only if page_properties is among selections (with fields)
     const include_seo = selections.some(
@@ -1669,6 +1726,7 @@ async function generateExcelTemplate() {
         include_assets,
         include_pages,
         include_components_add,
+        include_components_update,
         default_template_name,
         template_parent_path: "/content/we-retail/us/en",
         allowed_components_page_path: "/content/we-retail/us/en/men",
@@ -2662,24 +2720,8 @@ if (document.readyState === "loading") {
 }
 
 
-function onTplIncludePagesChange() {
-  const box = document.getElementById("tpl-pages-options");
-  const cb = document.getElementById("tpl-include-pages");
-  const addCb = document.getElementById("tpl-include-add");
-  const modeHint = document.getElementById("tpl-mode-hint");
-  if (box && cb) box.style.display = cb.checked ? "block" : "none";
-  // New page flow → prefer Add sheets; updates belong in a separate template
-  if (cb && cb.checked && addCb) {
-    addCb.checked = true;
-  }
-  if (modeHint) {
-    if (cb && cb.checked) {
-      modeHint.innerHTML = "<strong>Mode: New pages.</strong> Selected components become <em>Add …</em> sheets only (no Instance / update sheets). For updates on existing pages, uncheck Pages and generate a second template.";
-    } else {
-      modeHint.innerHTML = "<strong>Mode: Update existing.</strong> Selected components become sheets with an <em>Instance</em> column. Use separate Add sheets only if you also tick Components Add.";
-    }
-  }
-}
+/* onTplIncludePagesChange replaced below */
+
 
 async function loadTplTemplates() {
   const sel = document.getElementById("tpl-default-template");
@@ -2846,5 +2888,47 @@ async function clearBulkSession() {
     alert("Bulk session cleared. Next Preview is a full baseline (same as after a page reload).");
   } catch (e) {
     alert(e.message || String(e));
+  }
+}
+
+
+function isTplNewPageMode() {
+  const cb = document.getElementById("tpl-include-pages");
+  return !!(cb && cb.checked);
+}
+
+function applyDefaultAddUpdateForComp(ci) {
+  const a = document.querySelector('.tpl-comp-add[data-ci="' + ci + '"]');
+  const u = document.querySelector('.tpl-comp-update[data-ci="' + ci + '"]');
+  if (!a && !u) return; // page properties
+  if (isTplNewPageMode()) {
+    if (a) a.checked = true;
+    if (u) u.checked = false;
+  } else {
+    if (a) a.checked = false;
+    if (u) u.checked = true;
+  }
+}
+
+function onTplIncludePagesChange() {
+  const box = document.getElementById("tpl-pages-options");
+  const cb = document.getElementById("tpl-include-pages");
+  const modeHint = document.getElementById("tpl-mode-hint");
+  if (box && cb) box.style.display = cb.checked ? "block" : "none";
+  // Re-apply defaults only for currently selected components
+  document.querySelectorAll(".tpl-comp-check:checked").forEach((el) => {
+    const ci = el.getAttribute("data-ci");
+    applyDefaultAddUpdateForComp(ci);
+  });
+  // Hide Update option styling in new-page mode (still can force if needed - user asked default only)
+  document.querySelectorAll(".tpl-comp-upd-label").forEach((lab) => {
+    lab.style.opacity = cb && cb.checked ? "0.45" : "1";
+  });
+  if (modeHint) {
+    if (cb && cb.checked) {
+      modeHint.innerHTML = "<strong>Mode: New pages.</strong> For each selected component, <em>Add</em> is checked by default (Update off). Template gets only Add sheets for those components.";
+    } else {
+      modeHint.innerHTML = "<strong>Mode: Existing pages.</strong> For each selected component, <em>Update</em> is checked by default. Tick <em>Add</em> only if you also need new instances. Tick both if you need both sheets.";
+    }
   }
 }

@@ -15,6 +15,74 @@ from openpyxl import load_workbook
 from backend.app.services.dictionary_service import load_dictionary, resolve_label
 from backend.app.services.aem_client import AEMClient
 
+def _resolve_resource_type_from_name(name: str, dictionary: dict) -> Optional[str]:
+    """Map sheet/component label (Title, button, Hero Image) → sling resourceType."""
+    n = _norm(name or "")
+    if not n:
+        return None
+    # exact resourceType string
+    if "/" in (name or "") and dictionary and name in dictionary:
+        return name
+    best = None
+    for rt, meta in (dictionary or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        label = _norm(meta.get("label") or "")
+        leaf = _norm(rt.split("/")[-1] if rt else "")
+        if n == label or n == leaf or n.replace(" ", "") == leaf.replace(" ", ""):
+            return rt
+        if leaf in n or n in leaf:
+            best = best or rt
+    return best
+
+
+def _resolve_field_name(header: str, resource_type: Optional[str], dictionary: dict) -> str:
+    """CA header → dialog field name."""
+    h = (header or "").strip()
+    hl = _norm(h)
+    if not h:
+        return h
+    # Common title/heading mappings (dynamic-friendly defaults)
+    if hl in ("title", "heading title", "component title") and resource_type and "title" in _norm(resource_type):
+        return "jcr:title"
+    if hl in ("title",) and resource_type and "title" in _norm(resource_type or ""):
+        return "jcr:title"
+    if hl in ("type", "type / size", "type/size", "heading level", "heading type", "size"):
+        if resource_type and "title" in _norm(resource_type):
+            return "type"
+    resolved = None
+    if resource_type:
+        try:
+            resolved = resolve_label(resource_type, h)
+        except Exception:
+            resolved = None
+    if not resolved and resource_type and dictionary:
+        fields = (dictionary.get(resource_type) or {}).get("fields") or {}
+        for fn, aliases in fields.items():
+            alist = aliases if isinstance(aliases, list) else [str(aliases)]
+            if _norm(fn) == hl or any(_norm(a) == hl for a in alist):
+                resolved = fn
+                break
+    if not resolved and dictionary:
+        for rt, meta in dictionary.items():
+            if not isinstance(meta, dict):
+                continue
+            fields = meta.get("fields") or {}
+            for fn, aliases in fields.items():
+                alist = aliases if isinstance(aliases, list) else [str(aliases)]
+                if _norm(fn) == hl or any(_norm(a) == hl for a in alist):
+                    resolved = fn
+                    break
+            if resolved:
+                break
+    if not resolved:
+        # Title sheet column "Title" → jcr:title when unresolved
+        if hl == "title":
+            return "jcr:title"
+        resolved = h
+    return resolved
+
+
 def normalize_write_value(field_name: str, value):
     if value is None:
         return value
@@ -114,6 +182,8 @@ def parse_workbook(content: bytes) -> dict:
             continue
         headers = [str(h).strip() if h is not None else "" for h in rows[0]]
         resource_type = _parse_resource_type_from_sheet(ws)
+        if not resource_type:
+            resource_type = _resolve_resource_type_from_name(sheet_name, dictionary)
 
         # Map header index → dialog field name via dictionary
         header_map = {}  # col_idx -> field_name or special
@@ -126,34 +196,10 @@ def parse_workbook(content: bytes) -> dict:
             elif hl in ("instance", "instance number", "instance_no"):
                 header_map[idx] = "__instance__"
             else:
-                # Resolve CA label → dialog field for this resource type
-                rt_key = resource_type or "page_properties"
-                resolved = None
-                if resource_type:
-                    resolved = resolve_label(resource_type, h)
-                if not resolved and _sheet_is_page_properties(sheet_name, resource_type):
-                    resolved = resolve_label("page_properties", h)
-                if not resolved:
-                    # fallback: match aliases in dictionary for this resource type / page_properties
-                    data = dictionary
-                    try_list = []
-                    if resource_type:
-                        try_list.append(resource_type)
-                    try_list.append("page_properties")
-                    for try_rt in try_list:
-                        if not try_rt or try_rt not in data:
-                            continue
-                        fields = (data.get(try_rt) or {}).get("fields") or {}
-                        for fn, aliases in fields.items():
-                            alist = aliases if isinstance(aliases, list) else [str(aliases)]
-                            if _norm(fn) == hl or any(_norm(a) == hl for a in alist):
-                                resolved = fn
-                                break
-                        if resolved:
-                            break
-                    if not resolved:
-                        # last resort: use header as technical field name
-                        resolved = h
+                if _sheet_is_page_properties(sheet_name, resource_type):
+                    resolved = _resolve_field_name(h, "page_properties", dictionary)
+                else:
+                    resolved = _resolve_field_name(h, resource_type, dictionary)
                 header_map[idx] = resolved
 
         is_page = _sheet_is_page_properties(sheet_name, resource_type)
@@ -201,7 +247,7 @@ def parse_workbook(content: bytes) -> dict:
                     "resourceType": "page_properties",
                 })
             else:
-                rt = resource_type or sheet_name
+                rt = resource_type or _resolve_resource_type_from_name(sheet_name, dictionary) or sheet_name
                 key = _row_key_component(page_path, rt, instance)
                 if key in seen_comp:
                     duplicates_removed += 1
@@ -240,6 +286,7 @@ def _find_component_instance(
 ) -> Tuple[Optional[str], List[dict], Optional[str]]:
     """
     Find Nth (1-based) component on page matching resourceType (suffix or full).
+    Accepts friendly names (Title, button) by resolving via dictionary.
     Returns (path, matching_list, error).
     """
     result = aem.get_components(page_path)
@@ -247,13 +294,34 @@ def _find_component_instance(
         return None, [], result.get("message") or "Could not list components"
 
     comps = result.get("components") or []
-    rt_l = _norm(resource_type)
+    # Resolve friendly name → resourceType when needed
+    rt = resource_type or ""
+    if rt and "/" not in rt:
+        try:
+            dictionary = load_dictionary()
+            resolved = _resolve_resource_type_from_name(rt, dictionary)
+            if resolved:
+                rt = resolved
+        except Exception:
+            pass
+    rt_l = _norm(rt)
     rt_suffix = rt_l.split("/")[-1]
+    # also match "title" leaf against core/.../title and weretail/.../title
+    alt_suffixes = {rt_suffix}
+    if rt_suffix in ("title", "heroimage", "hero_image", "button", "teaser"):
+        alt_suffixes.add(rt_suffix.replace("_", ""))
 
     matching = []
     for c in comps:
         crt = _norm(c.get("resourceType") or "")
-        if crt == rt_l or crt.endswith("/" + rt_suffix) or crt.split("/")[-1] == rt_suffix:
+        leaf = crt.split("/")[-1]
+        if (
+            crt == rt_l
+            or crt.endswith("/" + rt_suffix)
+            or leaf == rt_suffix
+            or leaf in alt_suffixes
+            or rt_suffix in leaf
+        ):
             matching.append(c)
     matching = sorted(matching, key=lambda x: x.get("path") or "")
 

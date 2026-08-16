@@ -362,8 +362,104 @@ def build_validation_report(content: bytes) -> dict:
                     field_checks=field_checks,
                 )
 
+    # ========== COMPONENTS (Update sheets — Instance) ==========
+    parsed_upd = parse_workbook(content)
+    from backend.app.services.excel_bulk_service import _find_component_instance, normalize_compare_value as ncv
+    # normalize_compare_value already in this module
+    for row in parsed_upd.get("component_rows") or []:
+        page_path = row.get("page_path")
+        rt = row.get("resourceType") or row.get("component_label") or ""
+        instance = int(row.get("instance") or 1)
+        excel_row = row.get("excel_row")
+        sheet = row.get("sheet")
+        props = row.get("properties") or {}
+        if not page_path or not props:
+            continue
+        if not ps.path_exists(page_path):
+            rec(
+                "components",
+                f"upd-page-missing-{excel_row}",
+                False,
+                f"Update sheet: page missing {page_path}",
+                page_path=page_path,
+                excel_row=excel_row,
+                sheet=sheet,
+            )
+            continue
+        path, matching, err = _find_component_instance(aem, page_path, rt, instance)
+        if err or not path:
+            rec(
+                "components",
+                f"upd-missing-{excel_row}",
+                False,
+                f"Update sheet: {err or 'instance not found'}",
+                page_path=page_path,
+                component=rt,
+                excel_row=excel_row,
+                sheet=sheet,
+                instance=instance,
+            )
+            continue
+        fields_resp = aem.get_component_fields(path)
+        actual = fields_resp.get("fields") or {}
+        if isinstance(actual, list):
+            actual_map = {}
+            for f in actual:
+                if isinstance(f, dict) and f.get("name"):
+                    actual_map[f["name"]] = f.get("value") if "value" in f else f.get("currentValue")
+        elif isinstance(actual, dict):
+            actual_map = actual
+        else:
+            actual_map = {}
+        field_checks = []
+        all_ok = True
+        for k, expected in props.items():
+            if expected is None or _str(expected) == "":
+                continue
+            key = k
+            act = actual_map.get(key)
+            if act is None and _norm(key) == "title":
+                key = "jcr:title"
+                act = actual_map.get("jcr:title")
+            ok = normalize_compare_value(expected, act)
+            if not ok:
+                all_ok = False
+            field_checks.append({
+                "field": k,
+                "jcr_field": key,
+                "expected": _str(expected),
+                "actual": None if act is None else _str(act),
+                "ok": ok,
+            })
+        if all_ok:
+            rec(
+                "components",
+                f"upd-ok-{excel_row}-{instance}",
+                True,
+                f"Update OK: {rt} instance {instance} on {page_path}",
+                page_path=page_path,
+                component_path=path,
+                component=rt,
+                excel_row=excel_row,
+                sheet=sheet,
+                field_checks=field_checks,
+            )
+        else:
+            rec(
+                "components",
+                f"upd-mismatch-{excel_row}-{instance}",
+                False,
+                f"Update mismatch: {rt} instance {instance} on {page_path}",
+                page_path=page_path,
+                component_path=path,
+                component=rt,
+                excel_row=excel_row,
+                sheet=sheet,
+                field_checks=field_checks,
+            )
+
     # ========== SEO ==========
-    parsed = parse_workbook(content)
+    parsed = parsed_upd
     for row in parsed.get("page_rows") or []:
         path = row.get("page_path")
         jcr = f"{path}/jcr:content"
