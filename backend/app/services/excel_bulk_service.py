@@ -334,14 +334,33 @@ def _find_component_instance(
     return matching[idx].get("path"), matching, None
 
 
-def validate_all(parsed: dict, aem: Optional[AEMClient] = None) -> dict:
-    """Validate every row against AEM dialog before any write."""
+def validate_all(
+    parsed: dict,
+    aem: Optional[AEMClient] = None,
+    will_exist_paths: Optional[set] = None,
+) -> dict:
+    """Validate every row against AEM before any write.
+    will_exist_paths: page paths that will be created in the same bulk batch (Pages sheet).
+    SEO on those pages is planned update after create — not an error.
+    """
     aem = aem or AEMClient()
+    will_exist_paths = will_exist_paths or set()
+    will_exist_paths = {p.rstrip("/") for p in will_exist_paths if p}
     page_results = []
     comp_results = []
 
+    def _page_exists(page_path: str) -> bool:
+        try:
+            r = aem.session.get(
+                f"{aem.base_url}{page_path}.json",
+                timeout=min(getattr(aem, "timeout", 15) or 15, 10),
+            )
+            return r.status_code == 200
+        except Exception:
+            return False
+
     for row in parsed.get("page_rows") or []:
-        page_path = row["page_path"]
+        page_path = (row["page_path"] or "").rstrip("/")
         target = f"{page_path}/jcr:content"
         item = {
             "type": "page_properties",
@@ -351,23 +370,43 @@ def validate_all(parsed: dict, aem: Optional[AEMClient] = None) -> dict:
             "excel_row": row.get("excel_row"),
             "properties": row.get("properties") or {},
             "errors": [],
+            "warnings": [],
             "validation": None,
+            "page_status": None,
         }
-        # Page must be readable
-        fields = aem.get_component_fields(target)
-        if fields.get("status") != "success":
-            item["errors"].append(f"Page not readable: {page_path}")
-            page_results.append(item)
-            continue
-        validation = aem.validate_properties_for_update(target, row.get("properties") or {})
-        item["validation"] = validation
-        if validation.get("rejected"):
-            item["errors"].append(
-                "Rejected fields: "
-                + ", ".join(
-                    f"{r.get('name')} ({r.get('reason')})"
-                    for r in validation["rejected"]
+        exists = _page_exists(page_path)
+        if exists:
+            item["page_status"] = "exists"
+            # Fast property check — avoid heavy dialog discovery on preview
+            try:
+                validation = aem.validate_properties_for_update(
+                    target, row.get("properties") or {}
                 )
+                item["validation"] = validation
+                if validation.get("rejected"):
+                    item["errors"].append(
+                        "Rejected fields: "
+                        + ", ".join(
+                            f"{r.get('name')} ({r.get('reason')})"
+                            for r in validation["rejected"]
+                        )
+                    )
+                if validation.get("allowed"):
+                    item["will_update"] = validation["allowed"]
+            except Exception as e:
+                # Still allow update attempt on apply
+                item["warnings"].append(f"Could not pre-validate dialog fields: {e}")
+                item["will_update"] = list((row.get("properties") or {}).keys())
+        elif page_path in will_exist_paths:
+            item["page_status"] = "will_create_in_batch"
+            item["warnings"].append(
+                "Page will be created in Pages step — SEO fields will be applied after create"
+            )
+            item["will_update"] = list((row.get("properties") or {}).keys())
+        else:
+            item["page_status"] = "missing"
+            item["errors"].append(
+                f"Page not found and not scheduled for create in Pages sheet: {page_path}"
             )
         page_results.append(item)
 
@@ -519,18 +558,34 @@ def apply_all(parsed: dict, performed_by: str = "system", aem: Optional[AEMClien
 
 
 
-def preview_excel(content: bytes) -> dict:
+def preview_excel(content: bytes, will_exist_paths: Optional[set] = None) -> dict:
     """
     Parse + validate-all. Response shape matches frontend:
       summary.total_seo_rows, summary.total_component_rows
       seo_updates[], component_updates[]
+    will_exist_paths: pages that will be created in same bulk (from Pages sheet).
     """
     parsed = parse_workbook(content)
     if parsed.get("status") != "success":
         return parsed
 
+    # Derive will-exist from Pages sheet if not provided
+    if will_exist_paths is None:
+        will_exist_paths = set()
+        try:
+            from backend.app.services.page_bulk_service import preview_pages
+            pages = preview_pages(content)
+            for plan in pages.get("plans") or []:
+                p = plan.get("page_path")
+                if not p:
+                    continue
+                if plan.get("action") in ("create_page", "exists", "will_create"):
+                    will_exist_paths.add(p.rstrip("/"))
+        except Exception:
+            pass
+
     aem = AEMClient()
-    validated = validate_all(parsed, aem=aem)
+    validated = validate_all(parsed, aem=aem, will_exist_paths=will_exist_paths)
 
     seo_updates = []
     for row, vrow in zip(parsed.get("page_rows") or [], validated.get("page_results") or []):
@@ -539,12 +594,16 @@ def preview_excel(content: bytes) -> dict:
             "properties": row.get("properties") or {},
             "target_path": f"{row['page_path']}/jcr:content",
             "errors": vrow.get("errors") or [],
+            "warnings": vrow.get("warnings") or [],
+            "page_status": vrow.get("page_status"),
         }
         val = vrow.get("validation") or {}
         if val.get("rejected"):
             item["rejected_fields"] = val["rejected"]
         if val.get("allowed"):
             item["will_update"] = val["allowed"]
+        elif vrow.get("will_update"):
+            item["will_update"] = vrow.get("will_update")
         if val.get("skipped"):
             item["will_skip"] = val["skipped"]
         seo_updates.append(item)
@@ -807,7 +866,13 @@ def orchestrate_preview(content: bytes, username: str = None, session_id: str = 
     assets = plan_asset_uploads(content)
     pages = preview_pages(content)
     adds = parse_add_sheets(content)
-    updates = preview_excel(content)
+    # Build will_exist early so SEO preview knows pages created in this batch
+    will_exist_early = set()
+    for plan in pages.get("plans") or []:
+        p = plan.get("page_path")
+        if p and plan.get("action") in ("create_page", "exists", "will_create"):
+            will_exist_early.add(p.rstrip("/"))
+    updates = preview_excel(content, will_exist_paths=will_exist_early)
 
     ps = PageService()
     add_svc = ComponentAddService()
@@ -880,6 +945,13 @@ def orchestrate_preview(content: bytes, username: str = None, session_id: str = 
         # Empty properties warning
         if not (row.get("properties") or {}):
             entry["warnings"].append("No field values provided — component will be added with defaults only")
+
+        # Explicit action for UI — Add sheet always means NEW instance (page may already exist)
+        if entry.get("errors"):
+            entry["action"] = "blocked"
+        else:
+            entry["action"] = "add_new_instance"
+            entry["action_label"] = "Will ADD new component instance on page"
 
         validated_rows.append(entry)
 

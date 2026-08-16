@@ -71,9 +71,10 @@ def plan_asset_uploads(content: bytes) -> dict:
     parsed = parse_assets_sheet(content)
     if not parsed.get("rows"):
         return {
-            "status": "error",
-            "message": "No Assets rows found. Sheet must be named Assets with Source Path and Target Path.",
+            "status": "skipped",
+            "message": "No Assets sheet/rows in Excel — skipped (no asset upload in this batch).",
             "parse": parsed,
+            "results": [],
         }
 
     dam = DamService()

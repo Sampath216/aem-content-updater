@@ -72,7 +72,61 @@ def normalize_write_value(field_name: str, value):
 
 
 
+
+def _read_node_props(aem, path: str) -> dict:
+    """Fast property read for validation (no dialog discovery)."""
+    if not path:
+        return {}
+    try:
+        url = f"{aem.base_url}{path}.json"
+        r = aem.session.get(url, timeout=min(getattr(aem, "timeout", 15) or 15, 12))
+        if r.status_code != 200:
+            return {}
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _list_components_cached(aem, page_path: str, cache: dict) -> list:
+    if page_path in cache:
+        return cache[page_path]
+    try:
+        listed = aem.get_components(page_path)
+        comps = listed.get("components") or [] if isinstance(listed, dict) else []
+    except Exception:
+        comps = []
+    cache[page_path] = comps
+    return comps
+
+
 def build_validation_report(content: bytes) -> dict:
+    """Always returns a report dict — never raises to the HTTP layer."""
+    try:
+        return _build_validation_report_inner(content)
+    except Exception as e:
+        import traceback
+        return {
+            "status": "failed",
+            "message": f"Validation engine error: {e}",
+            "summary": {"pass": 0, "fail": 1, "warn": 0},
+            "high_level": {
+                "assets": {"pass": 0, "fail": 0, "warn": 0},
+                "pages": {"pass": 0, "fail": 0, "warn": 0},
+                "components": {"pass": 0, "fail": 0, "warn": 0},
+                "seo": {"pass": 0, "fail": 0, "warn": 0},
+            },
+            "detailed": {
+                "assets": [],
+                "pages": [],
+                "components": [],
+                "seo": [],
+                "engine": [{"id": "engine-error", "ok": False, "severity": "fail", "message": str(e), "trace": traceback.format_exc()[:2000]}],
+            },
+        }
+
+
+def _build_validation_report_inner(content: bytes) -> dict:
     aem = AEMClient()
     dam = DamService()
     ps = PageService()
@@ -223,6 +277,7 @@ def build_validation_report(content: bytes) -> dict:
             rec("pages", cid, True, f"Page skipped (Create=N): {path}", page_path=path, warn=True)
 
     # ========== COMPONENTS (Add sheets) ==========
+    comp_list_cache = {}
     adds = parse_add_sheets(content)
     by_page: OrderedDict = OrderedDict()
     for row in adds.get("rows") or []:
@@ -243,8 +298,7 @@ def build_validation_report(content: bytes) -> dict:
                 )
             continue
 
-        listed = aem.get_components(page_path)
-        comps = listed.get("components") or []
+        comps = _list_components_cached(aem, page_path, comp_list_cache)
 
         for row in rows:
             name = row.get("component") or ""
@@ -289,8 +343,7 @@ def build_validation_report(content: bytes) -> dict:
             # Prefer last match (most recently added often last in list — best effort)
             target = matches[-1]
             cpath = target.get("path")
-            fields_resp = aem.get_component_fields(cpath) if cpath else {}
-            actual = fields_resp.get("fields") or {}
+            actual = _read_node_props(aem, cpath) if cpath else {}
             if isinstance(actual, list):
                 actual_map = {}
                 for f in actual:
@@ -364,8 +417,7 @@ def build_validation_report(content: bytes) -> dict:
 
     # ========== COMPONENTS (Update sheets — Instance) ==========
     parsed_upd = parse_workbook(content)
-    from backend.app.services.excel_bulk_service import _find_component_instance, normalize_compare_value as ncv
-    # normalize_compare_value already in this module
+    from backend.app.services.excel_bulk_service import _find_component_instance
     for row in parsed_upd.get("component_rows") or []:
         page_path = row.get("page_path")
         rt = row.get("resourceType") or row.get("component_label") or ""
@@ -400,7 +452,7 @@ def build_validation_report(content: bytes) -> dict:
                 instance=instance,
             )
             continue
-        fields_resp = aem.get_component_fields(path)
+        fields_resp = {"fields": _read_node_props(aem, path)}
         actual = fields_resp.get("fields") or {}
         if isinstance(actual, list):
             actual_map = {}

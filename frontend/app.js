@@ -841,7 +841,9 @@ async function previewExcel() {
         // Assets
         const assets = data.assets || {};
         html += "<h4>1. Assets</h4>";
-        if (assets.summary) {
+        if (assets.status === "skipped" || (!(assets.plans || []).length && !assets.summary)) {
+            html += '<p style="color:#64748b;font-size:13px;">No Assets sheet — skipped for this batch (OK for existing-page updates).</p>';
+        } else if (assets.summary) {
             html += "<p>Planned uploads: " + (assets.summary.total_planned_uploads || 0) +
               ", rejected size: " + (assets.summary.total_rejected_size || 0) + "</p>";
         } else {
@@ -894,7 +896,9 @@ async function previewExcel() {
         // Pages
         const pages = data.pages || {};
         html += `<h4>2. Pages</h4>`;
-        if (pages.summary) {
+        if (pages.status === "skipped" || (!(pages.plans || []).length && !pages.summary)) {
+            html += `<p style="color:#64748b;font-size:13px;">No Pages sheet — skipped (existing pages must already exist).</p>`;
+        } else if (pages.summary) {
             html += `<p>Will create: ${pages.summary.will_create || 0}, exists: ${pages.summary.exists || 0}, blocked: ${pages.summary.blocked || 0}</p>`;
         }
         (pages.plans || []).forEach((p) => {
@@ -910,16 +914,37 @@ async function previewExcel() {
         html += "<p>Total: " + ((adds.rows || []).length) +
           " · OK: " + (addSum.ok != null ? addSum.ok : "?") +
           " · Blocked: " + (addSum.blocked != null ? addSum.blocked : "0") + "</p>";
+        if (!(adds.rows || []).length) {
+          html += '<p style="font-size:12px;color:#64748b;">No Add sheets in this Excel (nothing new to create).</p>';
+        }
         (adds.rows || []).forEach((r) => {
           const bad = r.errors && r.errors.length;
           const color = bad ? "#b91c1c" : "#15803d";
-          html += '<div style="font-size:13px;margin:4px 0;color:' + color + ';">';
-          html += (bad ? "✗ " : "✓ ") + "<code>" + (r.page_path || "") + "</code> + " + (r.component || "");
-          if (r.page_status) html += " <span style=\"color:#64748b\">[" + r.page_status + "]</span>";
-          if (bad) html += "<br><span style=\"font-size:12px\">" + r.errors.join("; ") + "</span>";
-          if (r.warnings && r.warnings.length) html += "<br><span style=\"font-size:12px;color:#c2410c\">" + r.warnings.join("; ") + "</span>";
+          const bg = bad ? "#fef2f2" : "#f0fdf4";
+          const props = r.properties || {};
+          const propPreview = Object.keys(props).slice(0, 5).map(function (k) {
+            return k + "=" + String(props[k]).slice(0, 48);
+          }).join(", ");
+          html += '<div style="font-size:13px;margin:6px 0;padding:8px 10px;border-radius:6px;background:' + bg + ';color:' + color + ';">';
+          if (bad) {
+            html += "✗ Cannot add: <strong>" + (r.component || "") + "</strong> on <code>" + (r.page_path || "") + "</code>";
+          } else {
+            html += "✓ Will <strong>ADD new instance</strong>: <strong>" + (r.component || "") + "</strong> → <code>" + (r.page_path || "") + "</code>";
+          }
+          if (r.page_status) {
+            html += ' <span style="color:#64748b;font-size:12px;">[page: ' + r.page_status + "]</span>";
+          }
+          if (propPreview) {
+            html += '<div style="font-size:11px;color:#475569;margin-top:4px;">Fields: ' + propPreview + "</div>";
+          }
+          if (bad) html += '<div style="font-size:12px;margin-top:4px;">' + r.errors.join("; ") + "</div>";
+          if (r.warnings && r.warnings.length) {
+            html += '<div style="font-size:12px;color:#c2410c;margin-top:4px;">' + r.warnings.join("; ") + "</div>";
+          }
           html += "</div>";
         });
+
+
 
         // Updates
         const updates = data.updates || {};
@@ -927,14 +952,47 @@ async function previewExcel() {
         const seoN = summary.total_seo_rows != null ? summary.total_seo_rows : ((updates.seo_updates || []).length || 0);
         const compN = summary.total_component_rows != null ? summary.total_component_rows : ((updates.component_updates || []).length || 0);
         html += "<h4>4. SEO / Component Updates</h4>";
-        html += "<p>SEO rows: " + seoN + ", Component rows: " + compN + "</p>";
-        const summaryJson = escapeDict(JSON.stringify({
-            assets_summary: assets.summary,
-            pages_summary: pages.summary,
-            add_count: (adds.rows || []).length,
-            updates_summary: summary
-        }, null, 2));
-        html += '<pre style="font-size:11px;max-height:200px;overflow:auto;background:#f8fafc;padding:8px;border-radius:6px;">' + summaryJson + "</pre>";
+        html += "<p style=\"font-size:12px;color:#475569;\">Sheets <em>without</em> the word Add (e.g. Title, button) = update existing components by Instance. SEO sheet = page properties.</p>";
+        html += "<p>SEO rows: " + seoN + ", Component update rows: " + compN + "</p>";
+        if (!seoN && !compN) {
+          html += '<p style="font-size:12px;color:#64748b;">No Update / SEO sheets in this Excel.</p>';
+        }
+        (updates.seo_updates || []).forEach((u) => {
+          const bad = u.errors && u.errors.length;
+          const pending = !bad && u.page_status === "will_create_in_batch";
+          const props = u.properties || {};
+          const propPreview = Object.keys(props).slice(0, 5).map(function (k) {
+            return k + "=" + String(props[k]).slice(0, 40);
+          }).join(", ");
+          const bg = bad ? "#fef2f2" : "#eff6ff";
+          const color = bad ? "#b91c1c" : "#1d4ed8";
+          html += '<div style="font-size:13px;margin:6px 0;padding:8px 10px;border-radius:6px;background:' + bg + ';color:' + color + ';">';
+          if (bad) {
+            html += "✗ SEO blocked: <code>" + (u.page_path || "") + "</code>";
+          } else if (pending) {
+            html += "✓ Will <strong>UPDATE SEO / page properties</strong> after page is created: <code>" + (u.page_path || "") + "</code>";
+          } else {
+            html += "✓ Will <strong>UPDATE SEO / page properties</strong>: <code>" + (u.page_path || "") + "</code>";
+          }
+          if (u.page_status) html += ' <span style="color:#64748b;font-size:12px;">[page: ' + u.page_status + "]</span>";
+          if (propPreview) html += '<div style="font-size:11px;color:#475569;margin-top:4px;">Fields: ' + propPreview + "</div>";
+          if (bad) html += '<div style="font-size:12px;">' + u.errors.join("; ") + "</div>";
+          if (u.warnings && u.warnings.length) html += '<div style="font-size:12px;color:#c2410c;">' + u.warnings.join("; ") + "</div>";
+          html += "</div>";
+        });
+        (updates.component_updates || []).forEach((u) => {
+          const bad = u.errors && u.errors.length;
+          const props = u.properties || {};
+          const propPreview = Object.keys(props).slice(0, 5).map(function (k) {
+            return k + "=" + String(props[k]).slice(0, 40);
+          }).join(", ");
+          const name = u.component_name || u.resourceType || "component";
+          html += '<div style="font-size:13px;margin:6px 0;padding:8px 10px;border-radius:6px;background:' + (bad ? "#fef2f2" : "#eff6ff") + ';color:' + (bad ? "#b91c1c" : "#1d4ed8") + ';">';
+          html += (bad ? "✗ " : "✓ Will <strong>UPDATE</strong>: ") + "<strong>" + name + "</strong> instance " + (u.instance || 1) + " on <code>" + (u.page_path || "") + "</code>";
+          if (propPreview) html += '<div style="font-size:11px;color:#475569;margin-top:4px;">Fields: ' + propPreview + "</div>";
+          if (bad) html += '<div style="font-size:12px;">' + u.errors.join("; ") + "</div>";
+          html += "</div>";
+        });
 
         previewEl.innerHTML = html;
         previewEl.style.display = "block";
@@ -1002,26 +1060,62 @@ async function applyExcel() {
     async function runStep(step) {
         state[step.id] = { status: "running", message: "In progress..." };
         renderProgress(state);
+        if (!lastExcelFile) {
+            const data = { status: "error", message: "No Excel file in session" };
+            state[step.id] = { status: "error", message: data.message, detail: data };
+            renderProgress(state);
+            return data;
+        }
         const formData = new FormData();
         formData.append("file", lastExcelFile);
-        const response = await fetch(API_BASE + step.endpoint, {
-            method: "POST",
-            headers: bulkSessionHeaders(),
-            body: formData,
-        });
+        // Validation can take longer on large batches — hard timeout so UI never sticks on "In progress"
+        const timeoutMs = step.id === "validate" ? 180000 : 120000;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
         let data = {};
-        try { data = await response.json(); } catch (_) { data = { status: "error", message: "Invalid response" }; }
+        let response;
+        try {
+            response = await fetch(API_BASE + step.endpoint, {
+                method: "POST",
+                headers: bulkSessionHeaders(),
+                body: formData,
+                signal: controller.signal,
+            });
+            try { data = await response.json(); } catch (_) { data = { status: "error", message: "Invalid JSON from server" }; }
+        } catch (e) {
+            const msg = (e && e.name === "AbortError")
+                ? ("Timed out after " + (timeoutMs / 1000) + "s — try a smaller batch or check AEM is running")
+                : (e.message || String(e));
+            data = { status: "error", message: msg };
+            state[step.id] = { status: "error", message: msg, detail: data };
+            renderProgress(state);
+            clearTimeout(timer);
+            return data;
+        }
+        clearTimeout(timer);
+        // Empty Assets/Pages sheets in existing-page Excel = intentional skip (not failure)
+        if (data.status === "skipped") {
+            state[step.id] = {
+                status: "skipped",
+                message: data.message || "Skipped — not in this Excel",
+                detail: data,
+            };
+            renderProgress(state);
+            return data;
+        }
         if (!response.ok || data.status === "error") {
             state[step.id] = {
                 status: "error",
                 message: data.message || data.detail || "Failed",
                 detail: data,
             };
+            renderProgress(state);
             return data;
         }
         let st = "success";
         if (data.status === "partial") st = "partial";
         if (data.status === "error" || data.status === "failed") st = "error";
+        if (data.status === "skipped") st = "skipped";
         if (data.status === "passed" || data.status === "success") st = (st === "error" ? "error" : "success");
         if (data.status === "passed") st = "success";
         // Assets: any row errors → not full success
@@ -1808,6 +1902,7 @@ function ensureToolbarButtons() {
     m.style.cssText = "width:100%;font-size:12px;color:#64748b;margin-top:4px;";
     bar.appendChild(m);
   }
+  try { wirePreviousTemplateButtons(); } catch (_) {}
   if (!document.getElementById("catalog-list")) {
     const list = document.createElement("div");
     list.id = "catalog-list";
@@ -1828,17 +1923,67 @@ if (document.readyState === "loading") {
 
 // ========== PREVIOUSLY USED TEMPLATES ==========
 
+function ensurePreviousTemplatesPanel() {
+  // Visible host used by BOTH toolbar and bulk-section "Load Previous Templates" buttons
+  let panel = document.getElementById("previous-templates-panel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "previous-templates-panel";
+    panel.style.cssText = "margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;";
+    // Prefer bulk update card / catalog area, else near toolbar, else body
+    const bulk =
+      document.getElementById("bulk-update-section") ||
+      document.getElementById("excel-bulk-section") ||
+      document.querySelector("[data-section='bulk']") ||
+      Array.from(document.querySelectorAll("h2,h3")).find((el) =>
+        /bulk excel|bulk update|excel update/i.test(el.textContent || "")
+      );
+    if (bulk) {
+      const parent = bulk.closest(".card") || bulk.parentElement || bulk;
+      parent.appendChild(panel);
+    } else {
+      const tb = document.getElementById("enterprise-toolbar") || document.body;
+      tb.appendChild(panel);
+    }
+  }
+  let msg = document.getElementById("catalog-message");
+  if (!msg) {
+    msg = document.createElement("div");
+    msg.id = "catalog-message";
+    msg.className = "message";
+    msg.style.cssText = "margin-bottom:10px;font-size:13px;";
+    panel.insertBefore(msg, panel.firstChild);
+  }
+  let list = document.getElementById("catalog-list");
+  if (!list) {
+    list = document.createElement("div");
+    list.id = "catalog-list";
+    list.style.cssText = "margin-top:8px;";
+    panel.appendChild(list);
+  }
+  return { panel, msg, list };
+}
+
 async function loadPreviousTemplates() {
-  const msg = document.getElementById("catalog-message");
+  const { panel, msg, list } = ensurePreviousTemplatesPanel();
   const setMsg = (t, ok) => {
     if (msg) {
       msg.textContent = t;
       msg.className = "message " + (ok ? "success" : "error");
+      msg.style.color = ok ? "#15803d" : "#b91c1c";
     }
   };
 
   try {
+    if (!accessToken) {
+      setMsg("Please log in first to load previous templates.", false);
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      return;
+    }
     setMsg("Loading previous templates...", true);
+    list.innerHTML = "<p style=\"color:#64748b;font-size:13px;\">Loading…</p>";
+    panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
     const res = await fetch(`${API_BASE}/api/templates/history`, {
       headers: { "Authorization": `Bearer ${accessToken}` }
     });
@@ -1850,17 +1995,7 @@ async function loadPreviousTemplates() {
     const templates = data.templates || [];
     window.__previousTemplatesCache = {};
     templates.forEach((t) => { window.__previousTemplatesCache[t.id] = t; });
-    let target = document.getElementById("catalog-list");
-    if (!target) {
-      target = document.createElement("div");
-      target.id = "catalog-list";
-      target.style.cssText = "margin-top:14px;";
-      const anchor = Array.from(document.querySelectorAll("h3,h2")).find(el =>
-        /previous templates|from catalog|template from catalog/i.test(el.textContent || "")
-      );
-      if (anchor && anchor.parentElement) anchor.parentElement.appendChild(target);
-      else document.body.appendChild(target);
-    }
+    let target = list;
 
     if (!templates.length) {
       target.innerHTML = `<p style="color:#64748b;font-size:13px;">
@@ -2127,17 +2262,22 @@ async function loadComponentCatalog() {
   return loadPreviousTemplates();
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+function wirePreviousTemplateButtons() {
   document.querySelectorAll("button").forEach((btn) => {
     const t = (btn.textContent || "").trim();
+    const id = (btn.id || "").toLowerCase();
     if (
+      id === "btn-load-prev-templates" ||
+      id === "btn-load-previous-templates" ||
       t === "Load Component Catalog" ||
       t.includes("Load Component Catalog") ||
       t.includes("Previous Templates") ||
-      t.includes("Load Previous Templates")
+      t.includes("Load Previous Templates") ||
+      t.includes("Previous Excel Templates")
     ) {
       btn.onclick = function (e) {
         e.preventDefault();
+        e.stopPropagation();
         loadPreviousTemplates();
       };
       if (t.includes("Load Component Catalog")) {
@@ -2145,6 +2285,13 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
   });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  wirePreviousTemplateButtons();
+  // Re-wire after short delay in case HTML buttons are injected later
+  setTimeout(wirePreviousTemplateButtons, 500);
+  setTimeout(wirePreviousTemplateButtons, 1500);
 });
 
 

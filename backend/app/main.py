@@ -567,10 +567,33 @@ async def excel_bulk_validate(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Post-apply verification: DAM, pages, components, field values vs Excel."""
-    if not file.filename.endswith((".xlsx", ".xls")):
-        return {"status": "error", "message": "Please upload a valid Excel file (.xlsx)"}
-    return build_validation_report(await file.read())
+    """Post-apply verification: DAM, pages, components, field values vs Excel.
+    Always returns JSON (never hangs the UI without a final status).
+    """
+    try:
+        if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+            return {"status": "error", "message": "Please upload a valid Excel file (.xlsx)"}
+        content = await file.read()
+        if not content:
+            return {"status": "error", "message": "Empty Excel file"}
+        report = build_validation_report(content)
+        # Normalize status for frontend progress UI
+        if not isinstance(report, dict):
+            return {"status": "failed", "message": "Invalid validation response", "summary": {"pass": 0, "fail": 1, "warn": 0}}
+        return report
+    except Exception as e:
+        return {
+            "status": "failed",
+            "message": f"Validation failed: {e}",
+            "summary": {"pass": 0, "fail": 1, "warn": 0},
+            "high_level": {
+                "assets": {"pass": 0, "fail": 0, "warn": 0},
+                "pages": {"pass": 0, "fail": 0, "warn": 0},
+                "components": {"pass": 0, "fail": 0, "warn": 0},
+                "seo": {"pass": 0, "fail": 0, "warn": 0},
+            },
+            "detailed": {"assets": [], "pages": [], "components": [], "seo": []},
+        }
 
 
 @app.post("/api/excel/bulk/validate/export")
@@ -668,15 +691,29 @@ async def excel_components_add_apply(
     adds = parse_add_sheets(content)
     by_page = OrderedDict()
     skipped_session = []
+
+    def _props_equal(a, b):
+        a = a or {}
+        b = b or {}
+        keys = set(a) | set(b)
+        for k in keys:
+            av = "" if a.get(k) is None else str(a.get(k)).strip()
+            bv = "" if b.get(k) is None else str(b.get(k)).strip()
+            if av.lower() != bv.lower():
+                return False
+        return True
+
     for row in adds.get("rows") or []:
         key = f"add|{row.get('page_path')}|{row.get('component')}|{row.get('excel_row')}"
-        # Skip if this exact add row was already applied in this page session
-        if key in prev_adds:
+        prev = prev_adds.get(key)
+        # Skip ONLY when same row was applied with the SAME field values (true no-op).
+        # Different values = CA wants another new component instance (or a re-run with new data).
+        if prev and _props_equal(prev.get("properties"), row.get("properties")):
             skipped_session.append({
                 "page_path": row.get("page_path"),
                 "component": row.get("component"),
                 "excel_row": row.get("excel_row"),
-                "reason": "already_applied_in_session",
+                "reason": "already_applied_identical_in_session",
             })
             continue
         by_page.setdefault(row["page_path"], []).append(row)
@@ -728,6 +765,8 @@ async def excel_assets_apply(
 ):
     content = await file.read()
     plan = plan_asset_uploads(content)
+    if plan.get("status") == "skipped":
+        return plan
     if plan.get("status") != "success":
         return {**plan, "status": "error"}
     dam = DamService()

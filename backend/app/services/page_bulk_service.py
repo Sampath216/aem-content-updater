@@ -109,9 +109,11 @@ def preview_pages(content: bytes) -> dict:
     parsed = parse_pages_sheet(content)
     if not parsed.get("rows"):
         return {
-            "status": "error",
-            "message": "No Pages rows found. Need sheet 'Pages' with Page Path, Create (Y/N), Template Name.",
+            "status": "skipped",
+            "message": "No Pages sheet/rows in Excel — skipped (existing pages workflow; pages must already exist).",
             "parse": parsed,
+            "plans": [],
+            "results": [],
         }
 
     ps = PageService()
