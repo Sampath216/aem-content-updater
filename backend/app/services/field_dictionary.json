@@ -104,6 +104,9 @@
         "Full Width",
         "Use Full Width",
         "useFullWidth"
+      ],
+      "file": [
+        "file"
       ]
     }
   },
@@ -160,6 +163,21 @@
         "Actions",
         "CTAs",
         "Call To Actions"
+      ],
+      "file": [
+        "file"
+      ],
+      "titleFromPage": [
+        "titleFromPage"
+      ],
+      "descriptionFromPage": [
+        "descriptionFromPage"
+      ],
+      "actions.link": [
+        "actions.link"
+      ],
+      "actions.text": [
+        "actions.text"
       ]
     }
   },
@@ -213,6 +231,12 @@
         "Max Items",
         "Maximum Items",
         "maxItems"
+      ],
+      "tagsSearchRoot": [
+        "tagsSearchRoot"
+      ],
+      "pages.pages": [
+        "pages.pages"
       ]
     }
   },
@@ -259,6 +283,21 @@
       "actions": [
         "Actions",
         "CTAs"
+      ],
+      "file": [
+        "file"
+      ],
+      "titleFromPage": [
+        "titleFromPage"
+      ],
+      "descriptionFromPage": [
+        "descriptionFromPage"
+      ],
+      "actions.link": [
+        "actions.link"
+      ],
+      "actions.text": [
+        "actions.text"
       ]
     }
   },
@@ -300,6 +339,322 @@
       ],
       "maxItems": [
         "Max Items"
+      ],
+      "tagsSearchRoot": [
+        "tagsSearchRoot"
+      ],
+      "linkItems": [
+        "linkItems"
+      ],
+      "showDescription": [
+        "showDescription"
+      ],
+      "showModificationDate": [
+        "showModificationDate"
+      ],
+      "pages.pages": [
+        "pages.pages"
+      ]
+    }
+  },
+  "weretail/components/content/button": {
+    "label": "button",
+    "fields": {
+      "label": [
+        "label"
+      ],
+      "linkTo": [
+        "linkTo"
+      ],
+      "cssClass": [
+        "cssClass"
+      ]
+    }
+  },
+  "weretail/components/content/carousel": {
+    "label": "carousel",
+    "fields": {
+      "autoplay": [
+        "autoplay"
+      ],
+      "delay": [
+        "delay"
+      ],
+      "autopauseDisabled": [
+        "autopauseDisabled"
+      ]
+    }
+  },
+  "weretail/components/content/list": {
+    "label": "list",
+    "fields": {
+      "listFrom": [
+        "listFrom"
+      ],
+      "parentPage": [
+        "parentPage"
+      ],
+      "childDepth": [
+        "childDepth"
+      ],
+      "query": [
+        "query"
+      ],
+      "searchIn": [
+        "searchIn"
+      ],
+      "tagsSearchRoot": [
+        "tagsSearchRoot"
+      ],
+      "tags": [
+        "tags"
+      ],
+      "tagsMatch": [
+        "tagsMatch"
+      ],
+      "orderBy": [
+        "orderBy"
+      ],
+      "sortOrder": [
+        "sortOrder"
+      ],
+      "maxItems": [
+        "maxItems"
+      ],
+      "linkItems": [
+        "linkItems"
+      ],
+      "showDescription": [
+        "showDescription"
+      ],
+      "showModificationDate": [
+        "showModificationDate"
+      ],
+      "itemType": [
+        "itemType"
+      ],
+      "pages": [
+        "pages"
+      ],
+      "pages.pages": [
+        "pages.pages"
+      ]
+    }
+  },
+  "weretail/components/content/sitefeature": {
+    "label": "sitefeature",
+    "fields": {
+      "file": [
+        "file"
+      ],
+      "jcr:title": [
+        "jcr:title"
+      ],
+      "titleFromPage": [
+        "titleFromPage"
+      ],
+      "jcr:description": [
+        "jcr:description"
+      ],
+      "descriptionFromPage": [
+        "descriptionFromPage"
+      ],
+      "linkURL": [
+        "linkURL"
+      ],
+      "actionsEnabled": [
+        "actionsEnabled"
+      ],
+      "actions": [
+        "actions"
+      ],
+      "actions.link": [
+        "actions.link"
+      ],
+      "actions.text": [
+        "actions.text"
+      ]
+    }
+  },
+  "cq/personalization/components/target": {
+    "label": "target",
+    "fields": {
+      "location": [
+        "location"
+      ],
+      "oldLocationName": [
+        "oldLocationName"
+      ],
+      "cq:targetEngine": [
+        "cq:targetEngine"
+      ],
+      "strategyPath": [
+        "strategyPath"
+      ],
+      "strategyName": [
+        "strategyName"
+      ],
+      "accurateTargeting": [
+        "accurateTargeting"
+      ],
+      "includeResolvedSegments": [
+        "includeResolvedSegments"
+      ],
+      "inhMappings": [
+        "inhMappings"
+      ],
+      "mappings": [
+        "mappings"
+      ],
+      "mappings.cq:mappings": [
+        "mappings.cq:mappings"
+      ],
+      "staticParams": [
+        "staticParams"
+      ],
+      "staticParams.staticParams": [
+        "staticParams.staticParams"
+      ]
+    }
+  },
+  "weretail/components/structure/page": {
+    "label": "page",
+    "fields": {
+      "jcr:title": [
+        "jcr:title"
+      ],
+      "cq:tags": [
+        "cq:tags"
+      ],
+      "hideInNav": [
+        "hideInNav"
+      ],
+      "_charset_": [
+        "_charset_"
+      ],
+      "pageTitle": [
+        "pageTitle"
+      ],
+      "navTitle": [
+        "navTitle"
+      ],
+      "subtitle": [
+        "subtitle"
+      ],
+      "jcr:description": [
+        "jcr:description"
+      ],
+      "onTime": [
+        "onTime"
+      ],
+      "offTime": [
+        "offTime"
+      ],
+      "sling:redirect": [
+        "sling:redirect"
+      ],
+      "jcr:language": [
+        "jcr:language"
+      ],
+      "cq:isLanguageRoot": [
+        "cq:isLanguageRoot"
+      ],
+      "cq:redirectTarget": [
+        "cq:redirectTarget"
+      ],
+      "cq:designPath": [
+        "cq:designPath"
+      ],
+      "sling:alias": [
+        "sling:alias"
+      ],
+      "cq:loginPath": [
+        "cq:loginPath"
+      ],
+      "cq:exportTemplate": [
+        "cq:exportTemplate"
+      ],
+      "cq:canonicalUrl": [
+        "cq:canonicalUrl"
+      ],
+      "cq:robotsTags": [
+        "cq:robotsTags"
+      ],
+      "sling:sitemapRoot": [
+        "sling:sitemapRoot"
+      ],
+      "image/file.sftmp": [
+        "image/file.sftmp"
+      ],
+      "cq:contextHubPath": [
+        "cq:contextHubPath"
+      ],
+      "cq:contextHubSegmentsPath": [
+        "cq:contextHubSegmentsPath"
+      ],
+      "cq:target-ambits": [
+        "cq:target-ambits"
+      ],
+      "msm:writeBlueprintConfig": [
+        "msm:writeBlueprintConfig"
+      ],
+      "msm:writeLiveCopyConfig": [
+        "msm:writeLiveCopyConfig"
+      ],
+      "socialMedia": [
+        "socialMedia"
+      ],
+      "variantPath": [
+        "variantPath"
+      ],
+      "vanitypath": [
+        "vanitypath"
+      ],
+      "vanitypath.sling:vanityPath": [
+        "vanitypath.sling:vanityPath"
+      ],
+      "allowedtemplates": [
+        "allowedtemplates"
+      ],
+      "allowedtemplates.cq:allowedTemplates": [
+        "allowedtemplates.cq:allowedTemplates"
+      ]
+    }
+  },
+  "weretail/components/content/contentfragment": {
+    "label": "contentfragment",
+    "fields": {
+      "fragmentPath": [
+        "fragmentPath"
+      ],
+      "displayMode": [
+        "displayMode"
+      ],
+      "elementNames": [
+        "elementNames"
+      ],
+      "variationName": [
+        "variationName"
+      ],
+      "paragraphScope": [
+        "paragraphScope"
+      ],
+      "paragraphRange": [
+        "paragraphRange"
+      ],
+      "paragraphHeadings": [
+        "paragraphHeadings"
+      ],
+      "elementNames.elementNames": [
+        "elementNames.elementNames"
+      ]
+    }
+  },
+  "weretail/components/content/tabs": {
+    "label": "tabs",
+    "fields": {
+      "activeItem": [
+        "activeItem"
       ]
     }
   }

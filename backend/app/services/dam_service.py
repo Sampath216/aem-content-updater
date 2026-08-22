@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from backend.app.services.aem_client import AEMClient
+from backend.app.services.audit_service import write_audit, ACTION_DAM_UPLOAD, ACTION_DAM_FOLDER
 
 # Standard responsive breakpoints used under each page DAM folder
 BREAKPOINTS = ("desktop", "mobile", "tablet")
@@ -574,7 +575,7 @@ class DamService:
         except Exception:
             return False
 
-    def upload_file(self, dam_folder_path: str, local_file: str, dam_name: Optional[str] = None) -> dict:
+    def upload_file(self, dam_folder_path: str, local_file: str, dam_name: Optional[str] = None, performed_by: str = "system") -> dict:
         """
         Upload as a real AEM DAM asset (dam:Asset) so it appears in Assets UI.
 
@@ -642,6 +643,15 @@ class DamService:
                 )
             attempts.append({"strategy": "api/assets", "status_code": r_api.status_code, "body": r_api.text[:120]})
             if r_api.status_code in (200, 201, 202) and self._is_dam_asset(asset_path):
+                write_audit(
+                    component_path=asset_path,
+                    property_name=ACTION_DAM_UPLOAD,
+                    old_value=None,
+                    new_value=str(local_file),
+                    success=True,
+                    message="DAM asset uploaded (api/assets)",
+                    performed_by=performed_by,
+                )
                 return {
                     "status": "success",
                     "message": "Uploaded via Assets HTTP API", "jcr:primaryType": "dam:Asset",
@@ -662,6 +672,15 @@ class DamService:
                 )
             attempts.append({"strategy": "createasset.html", "status_code": r_ca.status_code})
             if r_ca.status_code in (200, 201) and self._is_dam_asset(asset_path):
+                write_audit(
+                    component_path=asset_path,
+                    property_name=ACTION_DAM_UPLOAD,
+                    old_value=str(local_file),
+                    new_value=asset_path,
+                    success=True,
+                    message="DAM asset uploaded (createasset.html)",
+                    performed_by=performed_by,
+                )
                 return {
                     "status": "success",
                     "message": "Uploaded via createasset.html (dam:Asset)",
@@ -688,6 +707,15 @@ class DamService:
                 r3 = self.session.post(url_asset, files=files, data=data, timeout=max(self.timeout, 180))
             attempts.append({"strategy": "sling-dam:Asset", "status_code": r3.status_code})
             if r3.status_code in (200, 201) and self._is_dam_asset(asset_path):
+                write_audit(
+                    component_path=asset_path,
+                    property_name=ACTION_DAM_UPLOAD,
+                    old_value=str(local_file),
+                    new_value=asset_path,
+                    success=True,
+                    message="DAM asset uploaded (sling dam:Asset)",
+                    performed_by=performed_by,
+                )
                 return {
                     "status": "success",
                     "message": "Uploaded via Sling dam:Asset structure",
@@ -698,6 +726,15 @@ class DamService:
                 }
 
             if self._is_dam_asset(asset_path):
+                write_audit(
+                    component_path=asset_path,
+                    property_name=ACTION_DAM_UPLOAD,
+                    old_value=str(local_file),
+                    new_value=asset_path,
+                    success=True,
+                    message="DAM asset present after upload",
+                    performed_by=performed_by,
+                )
                 return {
                     "status": "success",
                     "message": "dam:Asset present after upload",
@@ -779,6 +816,7 @@ class DamService:
         local_page_folder: str,
         confirm_create_folders: bool = False,
         overwrite: bool = False,
+        performed_by: str = "system",
     ) -> dict:
         """
         Upload from local page folder.
@@ -855,7 +893,7 @@ class DamService:
                 })
                 skipped += 1
                 return
-            up = self.upload_file(dam_folder, item["local_path"], item["dam_name"])
+            up = self.upload_file(dam_folder, item["local_path"], item["dam_name"], performed_by=performed_by)
             up["breakpoint"] = bp_label
             up["local_path"] = item["local_path"]
             up["size_kb"] = item.get("size_kb")

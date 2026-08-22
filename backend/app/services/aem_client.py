@@ -374,9 +374,29 @@ class AEMClient:
         if self._is_include_node({"sling:resourceType": node.get("resourceType")}):
             return "INCLUDE"
 
-        if any(x in rt for x in ("/tabs", "foundation/tabs", "coral/foundation/tabs")):
+        # Multifield FIRST (must not be swallowed by /tabs substring or STRUCTURAL "items")
+        if (
+            "multifield" in rt
+            or rt.endswith("/multifield")
+            or "/form/multifield" in rt
+            or "multifield" in name
+        ):
+            return "MULTIFIELD"
+        # Composite granite multifield sometimes uses fieldset + cq:isContainer
+        if props.get("composite") in (True, "true", "True") and (
+            "field" in name or "multi" in name or "items" in name
+        ):
+            return "MULTIFIELD"
+
+        # Tab container widgets only — not every path containing "tabs" as folder name
+        if any(x in rt for x in (
+            "coral/foundation/tabs",
+            "granite/ui/components/coral/foundation/tabs",
+            "granite/ui/components/foundation/tabs",
+            "/foundation/tabs",
+        )):
             return "TAB_CONTAINER"
-        if name == "tabs" and not rt:
+        if name == "tabs" and "tab" in rt and "multifield" not in rt:
             return "TAB_CONTAINER"
 
         if any(x in rt for x in (
@@ -384,9 +404,6 @@ class AEMClient:
             "/fieldset", "/fixedcolumns", "/columns", "/accordion", "/well"
         )):
             return "CONTAINER"
-
-        if "multifield" in rt:
-            return "MULTIFIELD"
 
         if self._looks_like_field(rt, props):
             return "FIELD"
@@ -629,10 +646,40 @@ class AEMClient:
             out["fields"].append(self._build_field_record(node, tab_context))
         elif cls == "MULTIFIELD":
             props = node.get("properties") or {}
+            mf_name = self._normalize_name(props.get("name"))
+            if not mf_name:
+                # Recover storage name from dialog path (e.g. .../items/field → items)
+                p = (node.get("path") or "").replace("\\", "/")
+                parts = [x for x in p.split("/") if x]
+                skip = {
+                    "cq:dialog", "content", "items", "columns", "column", "tabs",
+                    "properties", "field", "multi", "multifield", "well", "list",
+                }
+                # Prefer last meaningful segment that looks like a property name
+                for part in reversed(parts):
+                    pl = part.lower()
+                    if pl in skip:
+                        continue
+                    if part.startswith("cq:") or part.startswith("jcr:"):
+                        continue
+                    mf_name = self._normalize_name(part)
+                    if mf_name:
+                        break
+                if not mf_name:
+                    mf_name = "items"
+            mf_label = (
+                props.get("fieldLabel")
+                or props.get("jcr:title")
+                or props.get("title")
+                or node.get("name")
+                or mf_name
+            )
+            if str(mf_label).lower() in ("multi", "multifield", "field"):
+                mf_label = mf_name
             mf = {
                 "type": "multifield",
-                "name": self._normalize_name(props.get("name")),
-                "label": props.get("fieldLabel") or props.get("jcr:title") or props.get("title") or node.get("name"),
+                "name": mf_name,
+                "label": mf_label,
                 "path": node.get("path"),
                 "resourceType": node.get("resourceType"),
                 "tab": tab_context,
@@ -641,6 +688,14 @@ class AEMClient:
             for child in node.get("children", []):
                 sub = self._collect_under(child, tab_context)
                 mf["itemFields"].extend(sub["fields"])
+                # Nested multifields inside composite (rare)
+                for nested in sub.get("multifields") or []:
+                    if nested.get("name"):
+                        mf["itemFields"].append({
+                            "name": nested.get("name"),
+                            "label": nested.get("label") or nested.get("name"),
+                            "type": "multifield",
+                        })
             out["multifields"].append(mf)
         elif cls == "INCLUDE":
             out["includes"].append({
@@ -884,6 +939,16 @@ class AEMClient:
         if self._as_bool(field.get("hidden")):
             return False
         if self._as_bool(field.get("disabled")):
+            return False
+        # Granite hidden widgets are usually not authorable — EXCEPT fields that
+        # Core Component editors replace at runtime (e.g. activeItem → dropdown of children).
+        ftype = (field.get("type") or "").lower()
+        frt = str(field.get("resourceType") or "").lower()
+        fname = (field.get("name") or "").strip().lower()
+        runtime_select = fname in (
+            "activeitem", "active_item", "activepanel", "active_panel",
+        )
+        if (ftype == "hidden" or "form/hidden" in frt) and not runtime_select:
             return False
         # ONLY hideOnEdit removes field while editing — not showOnCreate alone
         if editing_existing:
@@ -1130,6 +1195,73 @@ class AEMClient:
                         existing["options"] = old_opts
         return result
 
+
+    def _force_find_multifields(self, node: dict, found: list = None) -> list:
+        """
+        Fallback: walk discovered/classified tree and collect every multifield widget
+        even if classification missed it. Dynamic — no component-specific hardcoding.
+        """
+        if found is None:
+            found = []
+        if not isinstance(node, dict):
+            return found
+        rt = (node.get("resourceType") or node.get("sling:resourceType") or "").lower()
+        props = node.get("properties") or {}
+        name = (node.get("name") or "").lower()
+        is_mf = (
+            "multifield" in rt
+            or "multifield" in name
+            or props.get("composite") in (True, "true", "True")
+        )
+        if is_mf:
+            mf_name = self._normalize_name(props.get("name"))
+            if not mf_name:
+                p = (node.get("path") or "").replace("\\", "/")
+                parts = [x for x in p.split("/") if x]
+                skip = {
+                    "cq:dialog", "content", "items", "columns", "column", "tabs",
+                    "properties", "field", "multi", "multifield", "well", "list",
+                }
+                for part in reversed(parts):
+                    if part.lower() in skip or part.startswith("cq:") or part.startswith("jcr:"):
+                        continue
+                    mf_name = self._normalize_name(part)
+                    if mf_name:
+                        break
+            if not mf_name:
+                mf_name = "items"
+            # item fields from children
+            item_fields = []
+            for child in node.get("children") or []:
+                crt = (child.get("resourceType") or "").lower()
+                cprops = child.get("properties") or {}
+                if "multifield" in crt:
+                    continue
+                # field widget
+                if self._looks_like_field(crt, cprops) or (cprops.get("name") or "").startswith("./"):
+                    item_fields.append(self._build_field_record(child, None))
+                else:
+                    # container holding the field template
+                    for sub in child.get("children") or []:
+                        srt = (sub.get("resourceType") or "").lower()
+                        sprops = sub.get("properties") or {}
+                        if self._looks_like_field(srt, sprops) or (sprops.get("name") or "").startswith("./"):
+                            item_fields.append(self._build_field_record(sub, None))
+            # de-dupe by name
+            if not any((f.get("name") == mf_name) for f in found if isinstance(f, dict)):
+                found.append({
+                    "type": "multifield",
+                    "name": mf_name,
+                    "label": props.get("fieldLabel") or props.get("jcr:title") or props.get("title") or mf_name,
+                    "path": node.get("path"),
+                    "resourceType": node.get("resourceType"),
+                    "tab": None,
+                    "itemFields": item_fields,
+                })
+        for child in node.get("children") or []:
+            self._force_find_multifields(child, found)
+        return found
+
     def get_dialog_fields_for_resource_type(self, resource_type: str) -> dict:
         self._include_cache = {}  # fresh per resolution
         chain = self._build_dialog_chain(resource_type)
@@ -1162,6 +1294,19 @@ class AEMClient:
         discovered = self._discover_tree(effective_tree, primary_dialog_path or "", "cq:dialog")
         classified = self._classify_tree(discovered)
         authorable = self._extract_authorable(classified)
+
+        # Fallback: catch multifields missed by classification
+        forced_mf = self._force_find_multifields(classified)
+        existing_mf_names = {
+            (m.get("name") or "").lower()
+            for m in (authorable.get("multifields") or [])
+            if m.get("name")
+        }
+        for m in forced_mf:
+            n = (m.get("name") or "").lower()
+            if n and n not in existing_mf_names:
+                authorable.setdefault("multifields", []).append(m)
+                existing_mf_names.add(n)
 
         # Deduplicate by name; MERGE options when the same field appears
         # multiple times (e.g. Title type: datasource select + defaulttypes select)
@@ -1197,6 +1342,56 @@ class AEMClient:
                 if new_opts and not (existing.get("options")):
                     existing["path"] = f.get("path") or existing.get("path")
 
+        # Promote multifields into the flat field list so template/dictionary/UI
+        # consumers that only read "fields" still get Items, actions, etc.
+        mf_list = authorable.get("multifields") or []
+        seen_names = {f.get("name") for f in unique_fields if f.get("name")}
+        for mf in mf_list:
+            n = mf.get("name")
+            if not n or n in seen_names:
+                continue
+            unique_fields.append({
+                "name": n,
+                "label": mf.get("label") or n,
+                "type": "multifield",
+                "path": mf.get("path"),
+                "resourceType": mf.get("resourceType"),
+                "tab": mf.get("tab"),
+                "itemFields": mf.get("itemFields") or [],
+                "required": False,
+                "hidden": False,
+                "readOnly": False,
+            })
+            seen_names.add(n)
+            # Also expose composite item field names for Excel/dictionary (items.jcr:title style)
+            for it in mf.get("itemFields") or []:
+                iname = it.get("name") if isinstance(it, dict) else None
+                if not iname:
+                    continue
+                composite = f"{n}.{iname}"
+                if composite in seen_names:
+                    continue
+                unique_fields.append({
+                    "name": composite,
+                    "label": f"{mf.get('label') or n} / {it.get('label') or iname}",
+                    "type": it.get("type") or "textfield",
+                    "path": it.get("path"),
+                    "parentMultifield": n,
+                    "itemField": iname,
+                    "required": False,
+                    "hidden": False,
+                    "readOnly": False,
+                })
+                seen_names.add(composite)
+
+        # Fields nested only under tabs (ensure tab fields already in authorable["fields"])
+        for tab in authorable.get("tabs") or []:
+            for f in tab.get("fields") or []:
+                n = f.get("name") if isinstance(f, dict) else None
+                if n and n not in seen_names and self._is_authorable_field(f):
+                    unique_fields.append(f)
+                    seen_names.add(n)
+
         return {
             "status": "success",
             "resolution": {
@@ -1211,13 +1406,13 @@ class AEMClient:
             },
             "fields": self._merge_fields_by_name(unique_fields),
             "tabs": self._merge_tab_fields(authorable["tabs"]),
-            "multifields": authorable["multifields"],
+            "multifields": mf_list,
             "unknowns": authorable["unknowns"],
             "includes": authorable.get("includes", []),
             "diagnostics": {
                 "field_count": len(unique_fields),
                 "tab_count": len(authorable["tabs"]),
-                "multifield_count": len(authorable["multifields"]),
+                "multifield_count": len(mf_list),
                 "unknown_count": len(authorable["unknowns"]),
                 "include_count": len(authorable.get("includes", []))
             }
@@ -1418,6 +1613,86 @@ class AEMClient:
                 allowed[str(n).lower()] = str(n)
         return allowed
 
+
+    def _dialog_uses_children_editor(self, dialog_result: dict) -> bool:
+        """
+        Core Components (Tabs, Accordion, Carousel, ...) use Children Editor —
+        Items are child nodes, not a granite multifield in cq:dialog.
+        Detect dynamically via clientlibs / includes / resource types.
+        """
+        if not dialog_result:
+            return False
+        markers = ("childreneditor", "children-editor", "children_editor")
+        # extraClientlibs on dialog root (often in unknowns)
+        for u in dialog_result.get("unknowns") or []:
+            props = u.get("properties") or {}
+            ecl = props.get("extraClientlibs") or []
+            if isinstance(ecl, str):
+                ecl = [ecl]
+            blob = " ".join(str(x) for x in ecl).lower()
+            if any(m in blob for m in markers):
+                return True
+            rt = str(u.get("resourceType") or "").lower()
+            if any(m in rt for m in markers):
+                return True
+        for inc in dialog_result.get("includes") or []:
+            blob = str(inc).lower()
+            if any(m in blob for m in markers):
+                return True
+        # Full payload scan (clientlibs paths)
+        try:
+            import json
+            blob = json.dumps(dialog_result).lower()
+            if any(m in blob for m in markers):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _load_child_items(self, component_path: str) -> list:
+        """
+        Load child component nodes (Children Editor items) with panel titles.
+        Uses depth-1 JSON so children are included.
+        """
+        values = []
+        try:
+            url = f"{self.base_url}{component_path}.1.json"
+            r = self.session.get(url, timeout=min(getattr(self, "timeout", 15) or 15, 12))
+            if r.status_code != 200:
+                return values
+            deep = r.json()
+            if not isinstance(deep, dict):
+                return values
+            for ik, iv in deep.items():
+                if not isinstance(iv, dict):
+                    continue
+                if str(ik).startswith("jcr:") or str(ik).startswith("sling:") or str(ik).startswith("cq:"):
+                    continue
+                # Child components usually have resourceType; panel title is cq:panelTitle
+                rt = iv.get("sling:resourceType") or ""
+                title = (
+                    iv.get("cq:panelTitle")
+                    or iv.get("jcr:title")
+                    or iv.get("title")
+                    or iv.get("label")
+                    or ik
+                )
+                # Skip pure property bags without component identity
+                if not rt and not iv.get("cq:panelTitle") and not iv.get("jcr:title"):
+                    # still allow if it looks like a panel item
+                    if not any(k for k in iv.keys() if not str(k).startswith("jcr:")):
+                        continue
+                row = {
+                    "cq:panelTitle": title,
+                    "nodeName": ik,
+                }
+                if rt:
+                    row["sling:resourceType"] = rt
+                values.append(row)
+        except Exception:
+            return values
+        return values
+
     def get_component_fields(self, component_path: str) -> dict:
         try:
             url = f"{self.base_url}{component_path}.json"
@@ -1481,6 +1756,142 @@ class AEMClient:
                     mf["label"] = label
                     mf["currentValues"] = values
 
+            mfs = list(dialog_result.get("multifields") or [])
+            tabs_out = list(dialog_result.get("tabs") or [])
+
+            # Core Components Tabs/Accordion/Carousel: Items = Children Editor (child nodes)
+            uses_children_editor = self._dialog_uses_children_editor(dialog_result)
+            child_values = self._load_child_items(component_path) if uses_children_editor else []
+            if not child_values and uses_children_editor:
+                child_values = self._load_child_items(component_path)
+            # Also try children when dialog is empty of multifields but component has child nodes
+            if not child_values and not mfs:
+                child_values = self._load_child_items(component_path)
+                # Only treat as Items if at least one child looks like a panel/component
+                if child_values and not uses_children_editor:
+                    uses_children_editor = True
+
+            if uses_children_editor or child_values:
+                # Children Editor: each row is a CHILD COMPONENT (authored separately).
+                # Only panel title is author content; nodeName + resourceType identify the child.
+                item_fields = [
+                    {
+                        "name": "cq:panelTitle",
+                        "label": "Title",
+                        "type": "textfield",
+                        "role": "title",
+                        "readOnly": False,
+                    },
+                    {
+                        "name": "nodeName",
+                        "label": "Child node",
+                        "type": "textfield",
+                        "role": "node",
+                        "readOnly": True,
+                    },
+                    {
+                        "name": "sling:resourceType",
+                        "label": "Component type",
+                        "type": "textfield",
+                        "role": "resourceType",
+                        "readOnly": True,
+                    },
+                ]
+                fields["items"] = child_values
+                field_meta["items"] = {
+                    "name": "items",
+                    "label": "Items",
+                    "type": "multifield",
+                    "editor": "childreneditor",
+                    "itemFields": item_fields,
+                    "help": (
+                        "Each row is a child component under this container. "
+                        "Edit the title here; open the child component path to author its own fields."
+                    ),
+                }
+                mf_items = {
+                    "name": "items",
+                    "label": "Items",
+                    "type": "multifield",
+                    "editor": "childreneditor",
+                    "itemFields": item_fields,
+                    "currentValues": child_values,
+                    "help": field_meta["items"]["help"],
+                }
+                # de-dupe multifields
+                mfs = [m for m in mfs if (m.get("name") or "").lower() != "items"]
+                mfs.insert(0, mf_items)
+                # Ensure Items tab exists for UI (like AEM: Items | Properties)
+                tabs_out = [tb for tb in tabs_out if (tb.get("name") or "").lower() != "items"]
+                tabs_out.insert(0, {
+                    "type": "tab",
+                    "name": "items",
+                    "title": "Items",
+                    "fields": [],
+                    "multifields": [mf_items],
+                    "unknowns": [],
+                    "includes": [],
+                })
+                # Ensure Properties tab always present for children-editor components
+                if not any((tb.get("name") or "").lower() == "properties" for tb in tabs_out):
+                    tabs_out.append({
+                        "type": "tab",
+                        "name": "properties",
+                        "title": "Properties",
+                        "fields": [],
+                        "multifields": [],
+                        "unknowns": [],
+                        "includes": [],
+                    })
+
+                # Active Item (and similar): dialog stores hidden input; AEM editor JS
+                # turns it into a dropdown of child panels. Build the same options dynamically.
+                active_val = ""
+                try:
+                    active_val = data.get("activeItem") or data.get("activeitem") or ""
+                except Exception:
+                    active_val = ""
+                options = [{"value": "", "text": "Default"}]
+                for ch in child_values or []:
+                    node = (ch.get("nodeName") or "").strip()
+                    if not node:
+                        continue
+                    title = ch.get("cq:panelTitle") or node
+                    rt = (ch.get("sling:resourceType") or "").strip()
+                    # AEM-style label: "Layout Container: Tab 1" / "Title: Title"
+                    short = rt.split("/")[-1] if rt else "Component"
+                    # Friendlier labels for common types
+                    if "responsivegrid" in rt or short == "responsivegrid":
+                        short = "Layout Container"
+                    elif short:
+                        short = short[:1].upper() + short[1:]
+                    label = f"{short}: {title}"
+                    options.append({"value": node, "text": label})
+
+                active_field = {
+                    "name": "activeItem",
+                    "label": "Active Item",
+                    "type": "select",
+                    "resourceType": "granite/ui/components/coral/foundation/form/select",
+                    "tab": "Properties",
+                    "required": False,
+                    "hidden": False,
+                    "readOnly": False,
+                    "options": options,
+                    "emptyText": "Default",
+                    "help": "Which child panel is active by default (same as AEM Tabs Properties).",
+                }
+                fields["activeItem"] = active_val if active_val is not None else ""
+                field_meta["activeItem"] = active_field
+                # Attach to Properties tab fields
+                for tb in tabs_out:
+                    if (tb.get("name") or "").lower() == "properties":
+                        # replace/add activeItem
+                        existing = [f for f in (tb.get("fields") or []) if (f.get("name") or "").lower() != "activeitem"]
+                        existing.insert(0, active_field)
+                        tb["fields"] = existing
+                        break
+
             return {
                 "status": "success",
                 "component_path": component_path,
@@ -1488,8 +1899,8 @@ class AEMClient:
                 "field_count": len(fields),
                 "fields": fields,
                 "field_meta": field_meta,
-                "tabs": dialog_result.get("tabs", []),
-                "multifields": dialog_result.get("multifields", []),
+                "tabs": tabs_out,
+                "multifields": mfs,
                 "unknowns": dialog_result.get("unknowns", []),
                 "includes": dialog_result.get("includes", []),
                 "dialog_resolution": dialog_result.get("resolution", {})
@@ -1540,6 +1951,56 @@ class AEMClient:
                     "skipped": skipped,
                     "rejected": rejected,
                 }
+
+            # Children Editor: items = list of child panel titles (not a parent multifield property)
+            if "items" in valid_props and isinstance(valid_props.get("items"), list):
+                meta_items = (field_meta.get("items") or {})
+                if str(meta_items.get("editor") or "").lower() == "childreneditor" or any(
+                    isinstance(r, dict) and r.get("nodeName") for r in (valid_props.get("items") or [])
+                ):
+                    child_results = []
+                    for row in valid_props.get("items") or []:
+                        if not isinstance(row, dict):
+                            continue
+                        node = (row.get("nodeName") or "").strip()
+                        title = row.get("cq:panelTitle")
+                        if not node:
+                            continue
+                        child_path = f"{component_path.rstrip('/')}/{node}"
+                        try:
+                            if title is not None and str(title).strip() != "":
+                                r = self.session.post(
+                                    f"{self.base_url}{child_path}",
+                                    data={"./cq:panelTitle": str(title)},
+                                    timeout=self.timeout,
+                                )
+                                ok = r.status_code in (200, 201)
+                                child_results.append({"path": child_path, "ok": ok, "title": title})
+                                try:
+                                    from backend.app.services.audit_service import write_audit
+                                    write_audit(
+                                        component_path=child_path,
+                                        property_name="cq:panelTitle",
+                                        old_value=None,
+                                        new_value=title,
+                                        success=ok,
+                                        message="Children editor panel title",
+                                        performed_by=performed_by,
+                                    )
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            child_results.append({"path": child_path, "ok": False, "error": str(e)})
+                    # Remove items from parent POST (not a real property on parent)
+                    valid_props = {k: v for k, v in valid_props.items() if k != "items"}
+                    if not valid_props:
+                        return {
+                            "status": "success" if all(x.get("ok") for x in child_results) else "partial",
+                            "message": "Child panel titles updated",
+                            "component_path": component_path,
+                            "updated_properties": ["items"],
+                            "children": child_results,
+                        }
 
             url = f"{self.base_url}{component_path}"
             # Build Sling POST — support simple values and multifield lists dynamically

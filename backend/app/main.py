@@ -179,7 +179,12 @@ def diagnose_component(component_path: str, current_user: User = Depends(get_cur
 
 
 @app.get("/api/audit/logs")
-def get_audit_logs(limit: int = 50):
+def get_audit_logs(
+    limit: int = 50,
+    current_user: User = Depends(get_current_user),
+):
+    """Recent content changes — login required (enterprise audit trail)."""
+    limit = max(1, min(int(limit or 50), 500))
     db = SessionLocal()
     try:
         logs = (
@@ -217,6 +222,40 @@ def get_audit_logs(limit: int = 50):
 @app.post("/api/catalog/update-from-page")
 def update_catalog_from_page(page_path: str, current_user: User = Depends(get_current_user)):
     return ComponentCatalog().update_from_page(page_path)
+
+
+
+
+@app.post("/api/components/discover")
+def discover_components(
+    page_path: str = "",
+    sync_dictionary: bool = True,
+    include_apps_scan: bool = True,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Dynamic component discovery for Excel template creation.
+    Not limited to components previously opened in the tool.
+    Optionally sync all dialog field labels into the dictionary.
+    """
+    return ComponentAddService().discover_project_components(
+        page_path=(page_path or "").strip() or None,
+        include_apps_scan=include_apps_scan,
+        sync_dictionary=sync_dictionary,
+    )
+
+
+@app.post("/api/dictionary/sync-from-discover")
+def dictionary_sync_from_discover(
+    page_path: str = "",
+    current_user: User = Depends(get_current_user),
+):
+    """Discover all project components + dialog fields and merge into dictionary."""
+    return ComponentAddService().discover_project_components(
+        page_path=(page_path or "").strip() or None,
+        include_apps_scan=True,
+        sync_dictionary=True,
+    )
 
 
 @app.get("/api/catalog/list")
@@ -734,7 +773,7 @@ async def excel_components_add_apply(
             {"component": r["component"], "properties": r.get("properties") or {}}
             for r in rows
         ]
-        r = add_svc.apply_add(page_path, components)
+        r = add_svc.apply_add(page_path, components, performed_by=(current_user.full_name or current_user.username))
         add_results.append({"page_path": page_path, "status": r.get("status"), "result": r})
 
     return {
@@ -785,6 +824,7 @@ async def excel_assets_apply(
             page_dam_path=p["target_path"],
             local_page_folder=p["source_path"],
             confirm_create_folders=True,
+            performed_by=(current_user.full_name or current_user.username),
         )
         st = up.get("status") or "error"
         results.append({
@@ -869,6 +909,7 @@ def dam_upload_local(
         page_dam_path=page_dam_path,
         local_page_folder=local_page_folder,
         confirm_create_folders=confirm_create_folders,
+        performed_by=(current_user.full_name or current_user.username),
     )
 
 

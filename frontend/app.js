@@ -228,6 +228,170 @@ async function loadComponents() {
   }
 }
 
+
+// ========== CHILD COMPONENT EDITOR (nested — parent stays visible) ==========
+// Matches AEM: child dialog saves independently; parent dialog saves parent fields.
+let childEditorParentPath = null;
+
+async function openChildComponentEditor(childPath, titleHint) {
+  if (!accessToken || !childPath) return;
+  childEditorParentPath = selectedComponentPath;
+
+  // Overlay
+  let overlay = document.getElementById("child-editor-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "child-editor-overlay";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:10050;display:flex;align-items:stretch;justify-content:flex-end;";
+    const panel = document.createElement("div");
+    panel.id = "child-editor-panel";
+    panel.style.cssText = "width:min(520px,100%);max-width:100%;height:100%;background:#fff;box-shadow:-8px 0 24px rgba(0,0,0,0.15);display:flex;flex-direction:column;";
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:10px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:15px;color:#0f172a;">Child component</div>
+          <div id="child-editor-path" style="font-size:11px;color:#64748b;word-break:break-all;margin-top:4px;"></div>
+        </div>
+        <button type="button" id="child-editor-close" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;cursor:pointer;">Close</button>
+      </div>
+      <div id="child-editor-body" style="flex:1;overflow:auto;padding:16px;"></div>
+      <div style="padding:12px 16px;border-top:1px solid #e2e8f0;display:flex;gap:8px;justify-content:flex-end;background:#f8fafc;">
+        <span id="child-editor-msg" style="flex:1;font-size:12px;color:#64748b;align-self:center;"></span>
+        <button type="button" id="child-editor-save" style="padding:10px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">Save child</button>
+      </div>`;
+    overlay.appendChild(panel);
+    overlay.addEventListener("click", function (e) {
+      if (e.target === overlay) closeChildComponentEditor();
+    });
+    document.body.appendChild(overlay);
+    document.getElementById("child-editor-close").onclick = closeChildComponentEditor;
+  }
+  overlay.style.display = "flex";
+  document.getElementById("child-editor-path").textContent = childPath + (titleHint ? " — " + titleHint : "");
+  const body = document.getElementById("child-editor-body");
+  body.innerHTML = "<p style='color:#64748b;font-size:13px;'>Loading child fields…</p>";
+  document.getElementById("child-editor-msg").textContent = "";
+
+  try {
+    const response = await fetch(
+      API_BASE + "/api/aem/component/fields?component_path=" + encodeURIComponent(childPath),
+      { headers: { Authorization: "Bearer " + accessToken } }
+    );
+    const data = await response.json();
+    if (!response.ok || data.status !== "success") {
+      throw new Error(data.message || data.detail || "Failed to load child fields");
+    }
+    const fields = data.fields || {};
+    const fieldMeta = data.field_meta || {};
+    body.innerHTML = "";
+    body.dataset.childPath = childPath;
+
+    // Simple field form (no nested children-editor recursion for clarity)
+    const keys = Object.keys(fields).filter((k) => {
+      const m = fieldMeta[k] || {};
+      if ((m.editor || "").toLowerCase() === "childreneditor") return false;
+      if ((m.type || "").toLowerCase() === "multifield") return false;
+      return true;
+    });
+    if (!keys.length) {
+      body.innerHTML = "<p style='color:#64748b;font-size:13px;'>No simple fields on this child (it may only be a layout container). Add components inside it in AEM, or open a content child.</p>";
+    }
+    keys.forEach((key) => {
+      const meta = fieldMeta[key] || { label: key };
+      const label = meta.label || key;
+      const val = fields[key];
+      const row = document.createElement("div");
+      row.style.cssText = "margin-bottom:12px;";
+      const lab = document.createElement("label");
+      lab.style.cssText = "display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:4px;";
+      lab.textContent = label;
+      row.appendChild(lab);
+      if ((meta.type || "").toLowerCase().includes("checkbox") || val === true || val === false || val === "true" || val === "false") {
+        const inp = document.createElement("input");
+        inp.type = "checkbox";
+        inp.id = "child-field-" + key;
+        inp.checked = val === true || val === "true";
+        row.appendChild(inp);
+      } else if (meta.options && meta.options.length) {
+        const sel = document.createElement("select");
+        sel.id = "child-field-" + key;
+        sel.style.cssText = "width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;";
+        const empty = document.createElement("option");
+        empty.value = "";
+        empty.textContent = "—";
+        sel.appendChild(empty);
+        meta.options.forEach((o) => {
+          const opt = document.createElement("option");
+          opt.value = o.value != null ? String(o.value) : "";
+          opt.textContent = o.text || o.label || opt.value;
+          if (String(val) === opt.value) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        row.appendChild(sel);
+      } else {
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.id = "child-field-" + key;
+        inp.value = val != null ? String(val) : "";
+        inp.style.cssText = "width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;";
+        row.appendChild(inp);
+      }
+      body.appendChild(row);
+    });
+
+    document.getElementById("child-editor-save").onclick = async function () {
+      const msg = document.getElementById("child-editor-msg");
+      msg.textContent = "Saving child…";
+      const props = {};
+      keys.forEach((key) => {
+        const el = document.getElementById("child-field-" + key);
+        if (!el) return;
+        if (el.type === "checkbox") props[key] = el.checked ? "true" : "false";
+        else props[key] = el.value;
+      });
+      try {
+        const res = await fetch(
+          API_BASE + "/api/aem/component/update?component_path=" + encodeURIComponent(childPath),
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer " + accessToken,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(props),
+          }
+        );
+        const out = await res.json();
+        if (!res.ok || (out.status !== "success" && out.status !== "partial")) {
+          throw new Error(out.message || out.detail || "Child save failed");
+        }
+        msg.style.color = "#15803d";
+        msg.textContent = "Child saved (independent of parent — same as AEM).";
+      } catch (err) {
+        msg.style.color = "#b91c1c";
+        msg.textContent = err.message || String(err);
+      }
+    };
+  } catch (e) {
+    body.innerHTML = "<p style='color:#b91c1c;'>" + (e.message || String(e)) + "</p>";
+  }
+}
+
+function closeChildComponentEditor() {
+  const overlay = document.getElementById("child-editor-overlay");
+  if (overlay) overlay.style.display = "none";
+  // Parent Tabs component remains selected — reload parent fields so Active Item list stays fresh
+  if (childEditorParentPath && typeof selectComponent === "function") {
+    const parent = childEditorParentPath;
+    childEditorParentPath = null;
+    selectComponent(parent, null);
+  }
+}
+
+window.openChildComponentEditor = openChildComponentEditor;
+window.closeChildComponentEditor = closeChildComponentEditor;
+
+
 // ========== SELECT COMPONENT + LOAD FIELDS ==========
 // Holds multifield runtime state: { fieldKey: [ "val1", "val2", ... ] }
 let multifieldState = {};
@@ -476,7 +640,93 @@ async function selectComponent(componentPath, clickedElement) {
     }
 
 
-    function renderMultifield(container, mfKey, mfLabel, itemFields, currentValue, metaPath) {
+    function renderChildrenEditorList(container, mfKey, mfLabel, currentValue, helpText) {
+      const wrap = document.createElement("div");
+      wrap.className = "multifield-wrap children-editor-wrap";
+      wrap.style.cssText = "margin:14px 0 18px 0; padding:14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;";
+
+      const title = document.createElement("div");
+      title.style.cssText = "font-weight:600; font-size:13px; margin-bottom:6px; color:#1e293b;";
+      title.textContent = mfLabel || "Items";
+      wrap.appendChild(title);
+
+      const help = document.createElement("p");
+      help.style.cssText = "margin:0 0 12px; font-size:12px; color:#64748b; line-height:1.4;";
+      help.textContent = helpText || (
+        "Each row is a child component (not a free path field). Edit the title here. " +
+        "Open that child in the component list to author its own fields."
+      );
+      wrap.appendChild(help);
+
+      const listEl = document.createElement("div");
+      wrap.appendChild(listEl);
+
+      let rows = [];
+      if (Array.isArray(currentValue)) {
+        rows = currentValue.map((v) => (v && typeof v === "object" ? Object.assign({}, v) : { "cq:panelTitle": String(v) }));
+      }
+      multifieldState[mfKey] = rows;
+
+      (multifieldState[mfKey] || []).forEach((row, idx) => {
+        const line = document.createElement("div");
+        line.style.cssText = "display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; padding:10px; background:#fff; border:1px solid #e2e8f0; border-radius:8px;";
+
+        const titleInp = document.createElement("input");
+        titleInp.type = "text";
+        titleInp.value = row["cq:panelTitle"] || row.title || "";
+        titleInp.placeholder = "Title";
+        titleInp.title = "Panel / item title (authorable)";
+        titleInp.style.cssText = "flex:1; min-width:140px; padding:8px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px;";
+        titleInp.oninput = function () { multifieldState[mfKey][idx]["cq:panelTitle"] = titleInp.value; };
+        line.appendChild(titleInp);
+
+        const node = row.nodeName || "";
+        const nodeBadge = document.createElement("span");
+        nodeBadge.textContent = node || "—";
+        nodeBadge.title = "Child node name (identity, not content)";
+        nodeBadge.style.cssText = "font-size:11px; color:#475569; background:#f1f5f9; padding:6px 8px; border-radius:6px; max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;";
+        line.appendChild(nodeBadge);
+
+        const rt = row["sling:resourceType"] || "";
+        const rtBadge = document.createElement("span");
+        rtBadge.textContent = rt ? rt.split("/").slice(-2).join("/") : "component";
+        rtBadge.title = "Nested component — author separately:\n" + rt;
+        rtBadge.style.cssText = "font-size:11px; color:#1e40af; background:#dbeafe; padding:6px 8px; border-radius:6px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:Consolas,monospace;";
+        line.appendChild(rtBadge);
+
+        const parentPath = (document.getElementById("selected-component-path") || {}).textContent || "";
+        if (parentPath && node) {
+          const full = parentPath.replace(/\/+$/, "") + "/" + node;
+          const openBtn = document.createElement("button");
+          openBtn.type = "button";
+          openBtn.textContent = "Open";
+          openBtn.title = "Edit this child component in a panel (parent stays open)\n" + full;
+          openBtn.style.cssText = "padding:6px 12px; font-size:12px; font-weight:600; border:none; background:#2563eb; color:#fff; border-radius:6px; cursor:pointer;";
+          openBtn.onclick = function () {
+            if (typeof openChildComponentEditor === "function") {
+              openChildComponentEditor(full, row["cq:panelTitle"] || node);
+            }
+          };
+          line.appendChild(openBtn);
+        }
+        listEl.appendChild(line);
+      });
+
+      if (!(multifieldState[mfKey] || []).length) {
+        const empty = document.createElement("p");
+        empty.style.cssText = "font-size:12px; color:#94a3b8; margin:0;";
+        empty.textContent = "No child components yet.";
+        listEl.appendChild(empty);
+      }
+      container.appendChild(wrap);
+    }
+
+    function renderMultifield(container, mfKey, mfLabel, itemFields, currentValue, metaPath, mfMeta) {
+      mfMeta = mfMeta || {};
+      if (String(mfMeta.editor || "").toLowerCase() === "childreneditor") {
+        renderChildrenEditorList(container, mfKey, mfLabel, currentValue, mfMeta.help);
+        return;
+      }
       const wrap = document.createElement("div");
       wrap.className = "multifield-wrap";
       wrap.style.cssText = "margin:14px 0 18px 0; padding:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;";
@@ -594,14 +844,18 @@ async function selectComponent(componentPath, clickedElement) {
         renderedKeys.add(mfKey);
         const currentVal = mf.currentValues || currentFields[mfKey] || [];
         const label = (mf.label && mf.label.toLowerCase() !== "multi") ? mf.label : (mfKey === "pages" ? "Pages (Fixed List)" : mfKey);
-        renderMultifield(container, mfKey, label, mf.itemFields || [], currentVal, mf.path);
+        renderMultifield(container, mfKey, label, mf.itemFields || [], currentVal, mf.path, mf);
       });
     }
 
     // ---------- interactive tabs ----------
-    const tabsWithContent = tabs.filter(t =>
-      (t.fields && t.fields.length) || (t.multifields && t.multifields.length)
-    );
+    // Keep every dialog tab (Items + Properties) even if Properties has no authorable fields yet
+    let tabsWithContent = (tabs || []).filter(t => t && (t.title || t.name));
+    if (!tabsWithContent.length) {
+      tabsWithContent = tabs.filter(t =>
+        (t.fields && t.fields.length) || (t.multifields && t.multifields.length)
+      );
+    }
 
     const renderedKeys = new Set();
 
@@ -635,7 +889,14 @@ async function selectComponent(componentPath, clickedElement) {
         panel.style.display = idx === 0 ? "block" : "none";
         panelsWrap.appendChild(panel);
 
+        const beforeCount = panel.children.length;
         renderFieldsInto(panel, tab.fields, tab.multifields, renderedKeys);
+        if (!panel.children.length) {
+          const empty = document.createElement("p");
+          empty.style.cssText = "font-size:13px;color:#64748b;margin:8px 0;";
+          empty.textContent = "No authorable fields on this tab (technical/hidden fields only). Use Items for child components.";
+          panel.appendChild(empty);
+        }
 
         btn.onclick = () => {
           tabBar.querySelectorAll("button").forEach(b => {
@@ -673,7 +934,7 @@ async function selectComponent(componentPath, clickedElement) {
       renderedKeys.add(mfKey);
       const currentVal = mf.currentValues || currentFields[mfKey] || [];
       const label = (mf.label && mf.label.toLowerCase() !== "multi") ? mf.label : (mfKey === "pages" ? "Pages (Fixed List)" : mfKey);
-      renderMultifield(formEl, mfKey, label, mf.itemFields || [], currentVal, mf.path);
+      renderMultifield(formEl, mfKey, label, mf.itemFields || [], currentVal, mf.path, mf);
     });
 
     // Remaining flat fields
@@ -683,6 +944,16 @@ async function selectComponent(componentPath, clickedElement) {
       const meta = fieldMeta[key] || { label: key };
       // skip empty technical keys
       if (!key || key.includes("@TypeHint")) continue;
+      // Arrays / explicit multifield meta → multifield editor (Items, actions, …)
+      const isMf = (meta.type || "").toLowerCase() === "multifield"
+        || Array.isArray(value)
+        || (value && typeof value === "object" && !Array.isArray(value) && meta.itemFields);
+      if (isMf) {
+        const itemFields = meta.itemFields || [{ name: "value", label: "Value" }];
+        renderMultifield(formEl, key, meta.label || key, itemFields, value, meta.path, meta);
+        renderedKeys.add(key);
+        continue;
+      }
       renderFieldControl(formEl, key, value, meta);
       renderedKeys.add(key);
     }
@@ -1443,53 +1714,220 @@ async function openTemplateModal() {
   }
   showModalShell("Create Excel Template", "<p>Loading components...</p>", "");
   try {
-    const res = await fetch(`${API_BASE}/api/dictionary`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    const data = await res.json();
-    if (!res.ok || data.status !== "success") {
-      throw new Error(data.message || data.detail || "Failed to load components");
-    }
-    let components = data.components || [];
-
-    // Optional catalog merge by resourceType only
-    try {
-      const catRes = await fetch(`${API_BASE}/api/catalog/list`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (catRes.ok) {
-        const cat = await catRes.json();
-        const map = {};
-        components.forEach((c) => { map[c.resourceType] = c; });
-        const raw = cat.components || {};
-        const list = Array.isArray(raw) ? raw : Object.keys(raw).map((rt) => {
-          const entry = raw[rt] || {};
-          const versions = entry.versions || [];
-          const fields = (versions[0] && versions[0].fields) || entry.fields || [];
-          return {
-            resourceType: rt,
-            label: entry.label || rt.split("/").pop(),
-            fields: (Array.isArray(fields) ? fields : []).map((f) =>
-              typeof f === "string"
-                ? { field_name: f, ca_labels: [f] }
-                : { field_name: f.name || f.field_name, ca_labels: [f.label || f.name || f.field_name] }
-            ),
-          };
-        });
-        list.forEach((c) => {
-          if (!c.resourceType) return;
-          if (!map[c.resourceType]) map[c.resourceType] = c;
-        });
-        components = Object.values(map);
-      }
-    } catch (_) { /* catalog optional */ }
-
-    components = dedupeTemplateComponents(components);
+    let components = await loadTemplateComponentPool();
     renderTemplateUI(components);
   } catch (e) {
     document.getElementById("modal-body").innerHTML = `<p class="message error">${e.message}</p>`;
   }
 }
+
+/** Dictionary + catalog + optional prior discover cache */
+async function loadTemplateComponentPool() {
+  const res = await fetch(`${API_BASE}/api/dictionary`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await res.json();
+  if (!res.ok || data.status !== "success") {
+    throw new Error(data.message || data.detail || "Failed to load components");
+  }
+  let components = data.components || [];
+
+  try {
+    const catRes = await fetch(`${API_BASE}/api/catalog/list`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (catRes.ok) {
+      const cat = await catRes.json();
+      const map = {};
+      components.forEach((c) => { map[c.resourceType] = c; });
+      const raw = cat.components || {};
+      const list = Array.isArray(raw) ? raw : Object.keys(raw).map((rt) => {
+        const entry = raw[rt] || {};
+        const versions = entry.versions || [];
+        const fields = (versions[0] && versions[0].fields) || entry.fields || [];
+        return {
+          resourceType: rt,
+          label: entry.label || rt.split("/").pop(),
+          fields: (Array.isArray(fields) ? fields : []).map((f) =>
+            typeof f === "string"
+              ? { field_name: f, ca_labels: [f] }
+              : { field_name: f.name || f.field_name, ca_labels: [f.label || f.name || f.field_name] }
+          ),
+        };
+      });
+      list.forEach((c) => {
+        if (!c.resourceType) return;
+        if (!map[c.resourceType]) map[c.resourceType] = c;
+      });
+      components = Object.values(map);
+    }
+  } catch (_) { /* catalog optional */ }
+
+  return dedupeTemplateComponents(components);
+}
+
+/**
+ * Load ALL allowed / project components from AEM (not only previously used ones),
+ * sync dialog field labels into dictionary, refresh template UI.
+ */
+async function discoverComponentsForTemplate() {
+  if (!accessToken) {
+    alert("Please login first");
+    return;
+  }
+  const pathEl = document.getElementById("tpl-discover-page");
+  const pagePath = ((pathEl && pathEl.value) || "").trim();
+  const statusEl = document.getElementById("tpl-discover-status");
+  if (statusEl) {
+    statusEl.textContent = "Discovering components from AEM (policy + /apps scan) and syncing dictionary…";
+    statusEl.style.color = "#2563eb";
+  }
+  try {
+    const q = new URLSearchParams();
+    if (pagePath) q.set("page_path", pagePath);
+    q.set("sync_dictionary", "true");
+    q.set("include_apps_scan", "true");
+    const res = await fetch(`${API_BASE}/api/components/discover?` + q.toString(), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") {
+      throw new Error(data.message || data.detail || "Discover failed");
+    }
+    // Prefer discovered list (has fields); merge with dictionary pool for page_properties etc.
+    let discovered = data.components || [];
+    let pool = [];
+    try {
+      pool = await loadTemplateComponentPool();
+    } catch (_) {}
+    const map = {};
+    pool.forEach((c) => { if (c.resourceType) map[c.resourceType] = c; });
+    discovered.forEach((c) => {
+      if (!c.resourceType) return;
+      // Discovered wins for field lists when non-empty
+      const prev = map[c.resourceType];
+      if (!prev || (c.fields && c.fields.length >= (prev.fields || []).length)) {
+        map[c.resourceType] = c;
+      }
+    });
+    const components = dedupeTemplateComponents(Object.values(map));
+    renderTemplateUI(components);
+    if (statusEl) {
+      statusEl.textContent = data.message || ("Loaded " + components.length + " components. Dictionary updated.");
+      statusEl.style.color = "#15803d";
+    } else {
+      alert(data.message || "Components discovered");
+    }
+  } catch (e) {
+    if (statusEl) {
+      statusEl.textContent = e.message || String(e);
+      statusEl.style.color = "#b91c1c";
+    } else {
+      alert(e.message || String(e));
+    }
+  }
+}
+window.discoverComponentsForTemplate = discoverComponentsForTemplate;
+
+function onNestedChildChange(parentCi) {
+  const any = document.querySelectorAll('.tpl-nested-child[data-parent-ci="' + parentCi + '"]:checked').length > 0;
+  const addEl = document.querySelector('.tpl-comp-add[data-ci="' + parentCi + '"]');
+  const compCheck = document.querySelector('.tpl-comp-check[data-ci="' + parentCi + '"]');
+  if (any) {
+    if (compCheck && !compCheck.checked) {
+      compCheck.checked = true;
+      if (typeof toggleTplComp === "function") toggleTplComp(parentCi, true);
+    }
+    if (addEl) addEl.checked = true;
+    const mode = document.getElementById("tpl-mode-opts-" + parentCi);
+    if (mode) mode.style.display = "inline-flex";
+  }
+}
+window.onNestedChildChange = onNestedChildChange;
+
+/** When a page template is chosen, only show components allowed for that structure (via reference page). */
+async function filterTplComponentsByTemplate() {
+  const sel = document.getElementById("tpl-default-template");
+  const ref = document.getElementById("tpl-discover-page");
+  const statusEl = document.getElementById("tpl-discover-status");
+  const templateName = ((sel && sel.value) || "").trim();
+  let all = window.__tplComponentsAll || window.__tplComponents || [];
+  if (!window.__tplComponentsAll && window.__tplComponents) {
+    window.__tplComponentsAll = window.__tplComponents.slice();
+    all = window.__tplComponentsAll;
+  }
+  if (!templateName) {
+    // No template selected → show all discovered/dictionary components
+    renderTemplateUI(all);
+    if (statusEl) {
+      statusEl.textContent = "No template filter — showing all components.";
+      statusEl.style.color = "#64748b";
+    }
+    return;
+  }
+  const pagePath = ((ref && ref.value) || "").trim();
+  if (!pagePath) {
+    if (statusEl) {
+      statusEl.textContent = "Enter a reference page path (same template/site), then pick the template to filter allowed components.";
+      statusEl.style.color = "#b45309";
+    }
+    return;
+  }
+  if (!accessToken) return;
+  try {
+    if (statusEl) {
+      statusEl.textContent = "Filtering components allowed for this template/page…";
+      statusEl.style.color = "#2563eb";
+    }
+    const res = await fetch(
+      API_BASE + "/api/page/allowed-components?page_path=" + encodeURIComponent(pagePath),
+      { headers: { Authorization: "Bearer " + accessToken } }
+    );
+    const data = await res.json();
+    const allowed = data.allowed_resource_types || (data.allowed_for_ca || []).map((x) => x.resourceType);
+    const allowedSet = new Set((allowed || []).map((x) => String(x).toLowerCase()));
+    const friendly = {};
+    (data.allowed_for_ca || []).forEach((x) => {
+      if (x.resourceType) friendly[String(x.resourceType).toLowerCase()] = x.name;
+    });
+    if (!allowedSet.size) {
+      // keep all but warn
+      renderTemplateUI(all);
+      if (statusEl) {
+        statusEl.textContent = "No policy list returned — showing all components. Use Discover on a page that uses this template.";
+        statusEl.style.color = "#b45309";
+      }
+      return;
+    }
+    const filtered = all.filter((c) => {
+      const rt = (c.resourceType || "").toLowerCase();
+      if (rt === "page_properties") return true;
+      if (allowedSet.has(rt)) return true;
+      // leaf match
+      const leaf = rt.split("/").pop();
+      for (const a of allowedSet) {
+        if (a.endsWith("/" + leaf) || a.split("/").pop() === leaf) return true;
+      }
+      return false;
+    });
+    renderTemplateUI(filtered.length ? filtered : all);
+    if (statusEl) {
+      statusEl.textContent = filtered.length
+        ? ("Showing " + filtered.length + " component(s) allowed for this page/template (of " + all.length + ").")
+        : "Filter matched none — showing all.";
+      statusEl.style.color = "#15803d";
+    }
+  } catch (e) {
+    if (statusEl) {
+      statusEl.textContent = e.message || String(e);
+      statusEl.style.color = "#b91c1c";
+    }
+  }
+}
+window.filterTplComponentsByTemplate = filterTplComponentsByTemplate;
+
+
 
 function renderTemplateUI(components) {
   let html = `
@@ -1498,6 +1936,23 @@ function renderTemplateUI(components) {
       sheets without "Add" are for <strong>updating</strong> components already on the page.
       Use the <strong>Instance</strong> column in update sheets when the same component appears multiple times.
     </p>
+    <div style="margin:0 0 14px;padding:12px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff;">
+      <div style="font-weight:600;font-size:13px;color:#1e3a5f;margin-bottom:6px;">Load all project components from AEM</div>
+      <p style="margin:0 0 8px;font-size:12px;color:#475569;line-height:1.4;">
+        The list below starts from components already in the dictionary/catalog (pages you opened before).
+        To load <strong>all</strong> components allowed for the project/template (not only ones already used),
+        enter a reference page path (same template/site) and click Discover. Field labels are synced into the dictionary automatically.
+      </p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+        <input id="tpl-discover-page" type="text" placeholder="Reference page e.g. /content/we-retail/us/en/men"
+          style="flex:1;min-width:220px;padding:8px 10px;border:1px solid #93c5fd;border-radius:6px;font-size:13px;" />
+        <button type="button" onclick="discoverComponentsForTemplate()"
+          style="padding:8px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">
+          Discover from AEM + sync dictionary
+        </button>
+      </div>
+      <p id="tpl-discover-status" style="margin:8px 0 0;font-size:12px;color:#64748b;"></p>
+    </div>
     <div style="margin:0 0 14px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
       <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#0f172a;">Include in Excel</div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px;cursor:pointer;">
@@ -1508,10 +1963,10 @@ function renderTemplateUI(components) {
       </label>
       <div id="tpl-pages-options" style="margin:4px 0 8px 24px;">
         <label style="font-size:12px;color:#64748b;display:block;margin-bottom:4px;">Default template name for Pages sheet</label>
-        <select id="tpl-default-template" style="width:100%;max-width:360px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;">
-          <option value="">Loading templates...</option>
+        <select id="tpl-default-template" onchange="filterTplComponentsByTemplate()" style="width:100%;max-width:360px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;">
+          <option value="">All components (no template filter)</option>
         </select>
-        <p style="margin:4px 0 0;font-size:11px;color:#94a3b8;">CA can still change Create (Y/N) and Template Name in Excel later.</p>
+        <p style="margin:4px 0 0;font-size:11px;color:#94a3b8;">CA can still change Create (Y/N) and Template Name in Excel later. Pick a template + reference page to list only allowed components; leave empty for all.</p>
       </div>
       <p id="tpl-mode-hint" style="margin:8px 0 0;font-size:12px;color:#334155;line-height:1.45;">
         <strong>Per component:</strong> After you tick a component on the left, choose <em>Add</em> and/or <em>Update</em> for that component only.
@@ -1524,7 +1979,7 @@ function renderTemplateUI(components) {
     <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#0f172a;">Components & fields</div>`;
 
   if (!components.length) {
-    html += `<p>No components available. Open pages in the tool so components are stored in the dictionary/catalog first.</p>`;
+    html += `<p>No components yet. Use <strong>Discover from AEM + sync dictionary</strong> above (recommended), or open a page in the tool first.</p>`;
   }
 
   components.forEach((comp, ci) => {
@@ -1563,14 +2018,51 @@ function renderTemplateUI(components) {
               <span title="${escapeDict(fn)}">${escapeDict(lab)}</span>
             </label>`;
     });
-    html += `</div></div></div>`;
+    html += `</div>`;
+    // Dynamic "Add under {Parent}" — one checkbox per container parent (Tabs, Accordion, custom…)
+    // Disabled until that parent component is selected in the list
+    const parents = [];
+    components.forEach((p, pi) => {
+      if (pi === ci) return;
+      const isParent = !!(p.supportsChildren
+        || (p.resourceType || "").toLowerCase().match(/tabs|accordion|carousel/)
+        || (p.fields || []).some((f) => {
+          const n = (f.field_name || f || "").toString().toLowerCase();
+          return n === "items" || n === "activeitem";
+        }));
+      if (isParent) {
+        parents.push({ pi, label: p.label || p.resourceType || "Parent", rt: p.resourceType || "" });
+      }
+    });
+    if (parents.length && (comp.resourceType || "") !== "page_properties") {
+      html += `<div class="tpl-under-parents" data-ci="${ci}" style="margin-top:10px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+        <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:6px;">Place under parent container (optional)</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px 14px;">`;
+      parents.forEach((p) => {
+        html += `
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" class="tpl-add-under" data-child-ci="${ci}" data-parent-ci="${p.pi}"
+              data-parent-label="${escapeDict(p.label)}" data-parent-rt="${escapeDict(p.rt)}"
+              disabled onchange="onAddUnderChange()">
+            <span style="color:#94a3b8;" class="tpl-add-under-label" data-parent-ci="${p.pi}">Add under ${escapeDict(p.label)}</span>
+          </label>`;
+      });
+      html += `</div>
+        <p style="margin:6px 0 0;font-size:10px;color:#94a3b8;">Enabled only when that parent is selected above. Excel gets sheet: ParentName_ChildName with this component’s fields.</p>
+      </div>`;
+    }
+    html += `</div></div>`;
   });
 
+  if (!window.__tplComponentsAll || window.__tplComponentsAll.length < components.length) {
+    window.__tplComponentsAll = components.slice();
+  }
   window.__tplComponents = components;
 
   document.getElementById("modal-body").innerHTML = html;
   loadTplTemplates();
   onTplIncludePagesChange();
+  syncAddUnderEnabled();
   document.getElementById("modal-footer").innerHTML = `
     <button type="button" onclick="closeModal()" style="padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">Cancel</button>
     <button type="button" onclick="previewExcelTemplate()" style="padding:8px 14px;border:1px solid #2563eb;border-radius:6px;background:#eff6ff;color:#1d4ed8;cursor:pointer;font-weight:500;">Preview</button>
@@ -1578,10 +2070,70 @@ function renderTemplateUI(components) {
   `;
 }
 
+
+/** Enable "Add under {Parent}" only when that parent component checkbox is checked */
+function syncAddUnderEnabled() {
+  document.querySelectorAll(".tpl-add-under").forEach((box) => {
+    const parentCi = box.getAttribute("data-parent-ci");
+    const parentCheck = document.querySelector('.tpl-comp-check[data-ci="' + parentCi + '"]');
+    const on = !!(parentCheck && parentCheck.checked);
+    box.disabled = !on;
+    if (!on) box.checked = false;
+    const lab = box.parentElement && box.parentElement.querySelector(".tpl-add-under-label");
+    if (lab) lab.style.color = on ? "#0f172a" : "#94a3b8";
+  });
+}
+function onAddUnderChange() {
+  // If CA ticks "Add under Parent", ensure child component is selected + Add mode + fields visible
+  document.querySelectorAll(".tpl-add-under:checked").forEach((box) => {
+    const childCi = box.getAttribute("data-child-ci");
+    const cb = document.querySelector('.tpl-comp-check[data-ci="' + childCi + '"]');
+    if (cb && !cb.checked) {
+      cb.checked = true;
+      if (typeof toggleTplComp === "function") toggleTplComp(parseInt(childCi, 10), true);
+    }
+    const addEl = document.querySelector('.tpl-comp-add[data-ci="' + childCi + '"]');
+    // Child under parent is nested add — parent Add is enough; child sheet is Parent_Child
+    if (addEl) addEl.checked = false; // not top-level Add; nested sheet instead
+    const mode = document.getElementById("tpl-mode-opts-" + childCi);
+    if (mode) mode.style.display = "inline-flex";
+  });
+}
+window.syncAddUnderEnabled = syncAddUnderEnabled;
+window.onAddUnderChange = onAddUnderChange;
+
 function collectTemplateSelections() {
   const components = window.__tplComponents || [];
   const selections = [];
   const newPage = isTplNewPageMode();
+
+  // Map parentCi -> list of children with their selected fields (from "Add under Parent" checkboxes)
+  const underMap = {};
+  document.querySelectorAll(".tpl-add-under:checked").forEach((box) => {
+    if (box.disabled) return;
+    const parentCi = parseInt(box.getAttribute("data-parent-ci"), 10);
+    const childCi = parseInt(box.getAttribute("data-child-ci"), 10);
+    const child = components[childCi];
+    if (!child) return;
+    const childFields = [];
+    document.querySelectorAll('.tpl-field-check[data-ci="' + childCi + '"]:checked').forEach((f) => {
+      childFields.push(f.getAttribute("data-fn"));
+    });
+    // If no fields ticked yet, take all fields of child
+    if (!childFields.length) {
+      (child.fields || []).forEach((f) => {
+        const fn = f.field_name || f;
+        if (fn) childFields.push(fn);
+      });
+    }
+    underMap[parentCi] = underMap[parentCi] || [];
+    underMap[parentCi].push({
+      resourceType: child.resourceType || box.getAttribute("data-rt") || "",
+      label: child.label || child.resourceType || "Child",
+      fields: childFields,
+    });
+  });
+
   document.querySelectorAll(".tpl-comp-check:checked").forEach((cb) => {
     const ci = parseInt(cb.getAttribute("data-ci"), 10);
     const comp = components[ci];
@@ -1590,23 +2142,40 @@ function collectTemplateSelections() {
     document.querySelectorAll('.tpl-field-check[data-ci="' + ci + '"]:checked').forEach((f) => {
       fields.push(f.getAttribute("data-fn"));
     });
-    if (!fields.length) return;
-    const isPP = (comp.resourceType || "") === "page_properties";
+    const nested = underMap[ci] || [];
+    // Skip pure children that are only "under parent" (not top-level add/update)
+    const isOnlyUnder = document.querySelectorAll('.tpl-add-under[data-child-ci="' + ci + '"]:checked:not(:disabled)').length > 0;
     const addEl = document.querySelector('.tpl-comp-add[data-ci="' + ci + '"]');
     const updEl = document.querySelector('.tpl-comp-update[data-ci="' + ci + '"]');
-    let include_add = isPP ? false : !!(addEl && addEl.checked);
-    let include_update = isPP ? false : !!(updEl && updEl.checked);
+    let include_add = !!(addEl && addEl.checked);
+    let include_update = !!(updEl && updEl.checked);
+    if (isOnlyUnder && !include_add && !include_update && !nested.length) {
+      // Child only appears on Parent_Child sheets via parent's nested list — skip top-level sheet
+      return;
+    }
+    if (!fields.length && !nested.length) return;
+    if (!fields.length && nested.length) {
+      fields.push("activeItem");
+      fields.push("items");
+    }
+    const isPP = (comp.resourceType || "") === "page_properties";
+    if (nested.length) include_add = true;
     if (newPage) {
-      include_add = isPP ? false : true;
+      include_add = isPP ? false : (include_add || nested.length > 0 || !isOnlyUnder);
       include_update = false;
     }
-    // page properties always SEO sheet via include_seo logic
+    if (isPP) {
+      include_add = false;
+      include_update = false;
+    }
     selections.push({
       resourceType: comp.resourceType,
       label: comp.label || comp.resourceType,
       fields,
-      include_add: isPP ? false : include_add,
-      include_update: isPP ? false : include_update,
+      include_add: include_add,
+      include_update: include_update,
+      nested_children: nested,
+      supportsChildren: nested.length > 0 || !!(comp.supportsChildren),
     });
   });
   return selections;
@@ -1754,6 +2323,7 @@ async function previewExcelTemplate() {
 
 
 function toggleTplComp(ci, checked) {
+  setTimeout(syncAddUnderEnabled, 0);
   const box = document.getElementById("tpl-fields-" + ci);
   if (box) box.style.display = checked ? "block" : "none";
   const mode = document.getElementById("tpl-mode-opts-" + ci);
@@ -1882,6 +2452,7 @@ function ensureToolbarButtons() {
     { id: "btn-create-template", label: "Create Excel Template", onClick: "openTemplateModal()" },
     { id: "btn-load-prev-templates", label: "Previous Excel Templates", onClick: "loadPreviousTemplates()" },
     { id: "btn-clear-bulk-session", label: "Clear bulk session", onClick: "clearBulkSession()" },
+    { id: "btn-audit-log", label: "Audit Log", onClick: "openAuditLogModal()" },
   ];
   buttons.forEach((b) => {
     if (document.getElementById(b.id)) return;
@@ -3079,3 +3650,104 @@ function onTplIncludePagesChange() {
     }
   }
 }
+
+
+
+function friendlyAuditField(name) {
+  const map = {
+    "__page_create__": "Page created",
+    "__page_folder__": "Page folder",
+    "__dam_folder__": "DAM folder",
+    "__dam_upload__": "DAM asset upload",
+    "__component_add__": "Component added",
+    "__bulk__": "Bulk operation",
+  };
+  if (!name) return "—";
+  if (map[name]) return map[name];
+  return name;
+}
+
+// ========== AUDIT LOG (frontend) ==========
+async function openAuditLogModal() {
+  if (!accessToken) {
+    alert("Please log in to view the audit log.");
+    return;
+  }
+  showModalShell(
+    "Audit Log",
+    '<p style="color:#64748b;font-size:13px;">Loading recent changes…</p>',
+    '<button type="button" onclick="closeModal()" style="padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">Close</button>'
+  );
+  await loadAuditLogIntoModal(100);
+}
+
+async function loadAuditLogIntoModal(limit) {
+  limit = limit || 100;
+  const body = document.getElementById("modal-body");
+  const footer = document.getElementById("modal-footer");
+  if (!body) return;
+  try {
+    const res = await fetch(API_BASE + "/api/audit/logs?limit=" + encodeURIComponent(limit), {
+      headers: { Authorization: "Bearer " + accessToken },
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") {
+      throw new Error(data.message || data.detail || "Failed to load audit log");
+    }
+    const logs = data.logs || [];
+    let html = "";
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;">';
+    html += '<label style="font-size:13px;color:#475569;">Show last ';
+    html += '<select id="audit-limit" onchange="loadAuditLogIntoModal(parseInt(this.value,10))" style="margin:0 6px;padding:4px 8px;border-radius:6px;border:1px solid #cbd5e1;">';
+    [50, 100, 200, 500].forEach(function (n) {
+      html += '<option value="' + n + '"' + (n === limit ? " selected" : "") + ">" + n + "</option>";
+    });
+    html += "</select> entries</label>";
+    html += '<button type="button" onclick="loadAuditLogIntoModal(parseInt((document.getElementById(\'audit-limit\')||{}).value||100,10))" style="padding:6px 12px;border:1px solid #93c5fd;border-radius:6px;background:#eff6ff;color:#1d4ed8;cursor:pointer;font-size:13px;">Refresh</button>';
+    html += '<span style="font-size:12px;color:#64748b;">' + logs.length + " record(s)</span>";
+    html += "</div>";
+
+    if (!logs.length) {
+      html += '<p style="color:#64748b;font-size:13px;">No audit entries yet. Updates from the tool (single field or bulk) will appear here with the logged-in user.</p>';
+    } else {
+      html += '<div style="overflow:auto;max-height:60vh;border:1px solid #e2e8f0;border-radius:8px;">';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+      html += "<thead><tr style=\"background:#1e3a5f;color:#fff;text-align:left;\">";
+      ["When", "User", "Path", "Field", "Old", "New", "OK", "Message"].forEach(function (h) {
+        html += '<th style="padding:8px 10px;position:sticky;top:0;background:#1e3a5f;">' + h + "</th>";
+      });
+      html += "</tr></thead><tbody>";
+      logs.forEach(function (log, i) {
+        const bg = i % 2 ? "#f8fafc" : "#fff";
+        const ok = log.success === true || log.success === 1 || log.success === "true";
+        const when = (log.timestamp || "").replace("T", " ").slice(0, 19);
+        function cell(v, max) {
+          const s = v == null ? "" : String(v);
+          const short = s.length > (max || 60) ? s.slice(0, max || 60) + "…" : s;
+          return short.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+        html += '<tr style="background:' + bg + ';">';
+        html += '<td style="padding:6px 10px;white-space:nowrap;color:#475569;">' + cell(when, 20) + "</td>";
+        html += '<td style="padding:6px 10px;font-weight:600;">' + cell(log.performed_by || "—", 24) + "</td>";
+        html += '<td style="padding:6px 10px;font-family:Consolas,monospace;font-size:11px;" title="' + cell(log.component_path, 500) + '">' + cell(log.component_path, 48) + "</td>";
+        html += '<td style="padding:6px 10px;">' + cell(friendlyAuditField(log.property_name), 40) + "</td>";
+        html += '<td style="padding:6px 10px;color:#64748b;" title="' + cell(log.old_value, 500) + '">' + cell(log.old_value, 28) + "</td>";
+        html += '<td style="padding:6px 10px;color:#15803d;" title="' + cell(log.new_value, 500) + '">' + cell(log.new_value, 28) + "</td>";
+        html += '<td style="padding:6px 10px;text-align:center;font-weight:700;color:' + (ok ? "#15803d" : "#b91c1c") + ';">' + (ok ? "✓" : "✗") + "</td>";
+        html += '<td style="padding:6px 10px;color:#64748b;" title="' + cell(log.message, 500) + '">' + cell(log.message, 40) + "</td>";
+        html += "</tr>";
+      });
+      html += "</tbody></table></div>";
+    }
+    body.innerHTML = html;
+    if (footer) {
+      footer.innerHTML =
+        '<button type="button" onclick="closeModal()" style="padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">Close</button>';
+    }
+  } catch (e) {
+    body.innerHTML = '<p style="color:#b91c1c;">' + (e.message || String(e)) + "</p>";
+  }
+}
+
+window.openAuditLogModal = openAuditLogModal;
+window.loadAuditLogIntoModal = loadAuditLogIntoModal;

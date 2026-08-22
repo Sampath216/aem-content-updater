@@ -1,6 +1,285 @@
 {
   "templates": [
     {
+      "id": "tpl_20260822042243504414",
+      "name": "Template 2026-08-22 04:22",
+      "created_at": "2026-08-22T04:22:43.504363",
+      "last_used": "2026-08-22T04:22:43.504363",
+      "use_count": 1,
+      "include_seo": false,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "weretail/components/content/tabs",
+          "label": "tabs",
+          "fields": [
+            "activeItem"
+          ],
+          "include_add": true,
+          "include_update": false,
+          "nested_children": [
+            {
+              "resourceType": "weretail/components/content/button",
+              "label": "button"
+            },
+            {
+              "resourceType": "weretail/components/content/heroimage",
+              "label": "Hero Image"
+            },
+            {
+              "resourceType": "weretail/components/content/title",
+              "label": "Title"
+            }
+          ],
+          "supportsChildren": true
+        },
+        {
+          "resourceType": "weretail/components/content/title",
+          "label": "Title",
+          "fields": [
+            "jcr:title",
+            "type",
+            "linkURL"
+          ],
+          "include_add": true,
+          "include_update": false,
+          "nested_children": [],
+          "supportsChildren": false
+        }
+      ],
+      "fingerprint": "seo=0|weretail/components/content/tabs:activeItem|weretail/components/content/title:jcr:title,linkURL,type",
+      "summary": {
+        "component_count": 2,
+        "field_count": 4,
+        "labels": [
+          "tabs",
+          "Title"
+        ]
+      }
+    },
+    {
+      "id": "tpl_20260822035805084514",
+      "name": "Template 2026-08-22 04:54",
+      "created_at": "2026-08-22T03:58:05.084484",
+      "last_used": "2026-08-22T04:54:22.809656",
+      "use_count": 3,
+      "include_seo": false,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "weretail/components/content/tabs",
+          "label": "tabs",
+          "fields": [
+            "activeItem"
+          ],
+          "include_add": true,
+          "include_update": false
+        }
+      ],
+      "fingerprint": "seo=0|weretail/components/content/tabs:activeItem",
+      "summary": {
+        "component_count": 1,
+        "field_count": 1,
+        "labels": [
+          "tabs"
+        ]
+      }
+    },
+    {
+      "id": "tpl_20260822035457297623",
+      "name": "Template 2026-08-22 03:54",
+      "created_at": "2026-08-22T03:54:57.297575",
+      "last_used": "2026-08-22T03:54:57.297575",
+      "use_count": 1,
+      "include_seo": false,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "weretail/components/content/tabs",
+          "label": "tabs",
+          "fields": [
+            "activeItem"
+          ],
+          "include_add": false,
+          "include_update": true
+        },
+        {
+          "resourceType": "weretail/components/content/teaser",
+          "label": "Teaser",
+          "fields": [
+            "fileReference",
+            "jcr:title",
+            "jcr:description",
+            "linkURL",
+            "actionsEnabled",
+            "actions",
+            "file",
+            "titleFromPage",
+            "descriptionFromPage",
+            "actions.link",
+            "actions.text"
+          ],
+          "include_add": false,
+          "include_update": true
+        },
+        {
+          "resourceType": "weretail/components/content/title",
+          "label": "Title",
+          "fields": [
+            "jcr:title",
+            "type",
+            "linkURL"
+          ],
+          "include_add": false,
+          "include_update": true
+        }
+      ],
+      "fingerprint": "seo=0|weretail/components/content/tabs:activeItem|weretail/components/content/teaser:actions,actions.link,actions.text,actionsEnabled,descriptionFromPage,file,fileReference,jcr:description,jcr:title,linkURL,titleFromPage|weretail/components/content/title:jcr:title,linkURL,type",
+      "summary": {
+        "component_count": 3,
+        "field_count": 15,
+        "labels": [
+          "tabs",
+          "Teaser",
+          "Title"
+        ]
+      }
+    },
+    {
+      "id": "tpl_20260821120738376354",
+      "name": "Template 2026-08-21 12:07",
+      "created_at": "2026-08-21T12:07:38.376324",
+      "last_used": "2026-08-21T12:07:38.376324",
+      "use_count": 1,
+      "include_seo": true,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "page_properties",
+          "label": "Page Properties / SEO",
+          "fields": [
+            "jcr:title",
+            "pageTitle",
+            "navTitle",
+            "subtitle",
+            "jcr:description",
+            "cq:tags",
+            "hideInNav",
+            "onTime",
+            "offTime",
+            "cq:redirectTarget",
+            "cq:canonicalUrl",
+            "sling:alias",
+            "socialMedia",
+            "variantPath"
+          ],
+          "include_add": false,
+          "include_update": false
+        },
+        {
+          "resourceType": "weretail/components/content/button",
+          "label": "button",
+          "fields": [
+            "cssClass",
+            "label",
+            "linkTo"
+          ],
+          "include_add": true,
+          "include_update": false
+        },
+        {
+          "resourceType": "weretail/components/content/heroimage",
+          "label": "Hero Image",
+          "fields": [
+            "fileReference",
+            "heading",
+            "title",
+            "buttonLabel",
+            "buttonLinkTo",
+            "useFullWidth"
+          ],
+          "include_add": true,
+          "include_update": false
+        }
+      ],
+      "fingerprint": "seo=1|page_properties:cq:canonicalUrl,cq:redirectTarget,cq:tags,hideInNav,jcr:description,jcr:title,navTitle,offTime,onTime,pageTitle,sling:alias,socialMedia,subtitle,variantPath|weretail/components/content/button:cssClass,label,linkTo|weretail/components/content/heroimage:buttonLabel,buttonLinkTo,fileReference,heading,title,useFullWidth",
+      "summary": {
+        "component_count": 3,
+        "field_count": 23,
+        "labels": [
+          "Page Properties / SEO",
+          "button",
+          "Hero Image"
+        ]
+      }
+    },
+    {
+      "id": "tpl_20260821063232185690",
+      "name": "Template 2026-08-21 06:32",
+      "created_at": "2026-08-21T06:32:32.185630",
+      "last_used": "2026-08-21T06:32:32.185630",
+      "use_count": 1,
+      "include_seo": true,
+      "source": "dictionary",
+      "selections": [
+        {
+          "resourceType": "page_properties",
+          "label": "Page Properties / SEO",
+          "fields": [
+            "jcr:title",
+            "pageTitle",
+            "navTitle",
+            "subtitle",
+            "jcr:description",
+            "cq:tags",
+            "hideInNav",
+            "onTime",
+            "offTime",
+            "cq:redirectTarget",
+            "cq:canonicalUrl",
+            "sling:alias",
+            "socialMedia",
+            "variantPath"
+          ],
+          "include_add": false,
+          "include_update": false
+        },
+        {
+          "resourceType": "weretail/components/content/list",
+          "label": "list",
+          "fields": [
+            "childDepth",
+            "itemType",
+            "linkItems",
+            "listFrom",
+            "maxItems",
+            "orderBy",
+            "pages",
+            "parentPage",
+            "query",
+            "searchIn",
+            "showDescription",
+            "showModificationDate",
+            "sortOrder",
+            "tags",
+            "tagsMatch",
+            "tagsSearchRoot"
+          ],
+          "include_add": true,
+          "include_update": false
+        }
+      ],
+      "fingerprint": "seo=1|page_properties:cq:canonicalUrl,cq:redirectTarget,cq:tags,hideInNav,jcr:description,jcr:title,navTitle,offTime,onTime,pageTitle,sling:alias,socialMedia,subtitle,variantPath|weretail/components/content/list:childDepth,itemType,linkItems,listFrom,maxItems,orderBy,pages,parentPage,query,searchIn,showDescription,showModificationDate,sortOrder,tags,tagsMatch,tagsSearchRoot",
+      "summary": {
+        "component_count": 2,
+        "field_count": 30,
+        "labels": [
+          "Page Properties / SEO",
+          "list"
+        ]
+      }
+    },
+    {
       "id": "tpl_20260816024738448646",
       "name": "Template 2026-08-16 02:47",
       "created_at": "2026-08-16T02:47:38.448600",

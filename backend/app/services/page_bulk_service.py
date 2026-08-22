@@ -303,6 +303,7 @@ def apply_pages(content: bytes, performed_by: str = "system") -> dict:
             name=name,
             title=plan.get("title") or name,
             template_path=plan["template_path"],
+            performed_by=performed_by,
         )
         out["result"] = r
         out["status"] = r.get("status")

@@ -765,6 +765,118 @@ def _is_add_sheet(name: str) -> bool:
     return (name or "").strip().lower().startswith("add ")
 
 
+
+def parse_add_under_sheets(content: bytes) -> dict:
+    """
+    Nested children under a parent container (dynamic — any parent name).
+    Sheet types:
+      - "Add under Tabs"
+      - "tabs_Title" / "{Parent}_{Child}" with column Parent Component
+    Columns: Page Path | Parent Component | Parent Instance | Child Title | + child field values
+    """
+    from openpyxl import load_workbook
+    import io
+    wb = load_workbook(io.BytesIO(content), data_only=True)
+    rows = []
+    errors = []
+    skip = {
+        "instructions", "how to use", "assets", "pages", "page properties seo", "seo",
+    }
+    for name in wb.sheetnames:
+        low = name.strip().lower()
+        if low in skip:
+            continue
+        if low.startswith("add ") and not low.startswith("add under"):
+            continue  # top-level Add Title / Add tabs
+        ws = wb[name]
+        headers = []
+        for cell in next(ws.iter_rows(min_row=1, max_row=1, values_only=True), []):
+            if cell is None:
+                break
+            headers.append(str(cell).strip())
+        if not headers:
+            continue
+        hmap = {i: (h or "").strip().lower() for i, h in enumerate(headers)}
+        has_parent = any("parent component" in h or h == "parent" for h in hmap.values())
+        is_add_under = low.startswith("add under")
+        # Parent_Child sheet names (tabs_Title) when Parent Component column present
+        if not is_add_under and not has_parent:
+            continue
+        if not has_parent and not is_add_under:
+            continue
+
+        def col(*names):
+            for i, h in hmap.items():
+                for n in names:
+                    if n == h or n in h:
+                        return i
+            return None
+
+        i_page = col("page path", "pagepath", "page")
+        i_parent = col("parent component", "parent")
+        i_inst = col("parent instance", "instance")
+        i_child = col("child component name", "child component", "child name")
+        i_title = col("child title", "panel title")
+        if i_page is None:
+            errors.append(f"{name}: need Page Path column")
+            continue
+
+        # Infer child component name from sheet: "tabs_Title" -> Title, "Add under tabs" -> need column
+        child_from_sheet = None
+        if "_" in name and not is_add_under:
+            child_from_sheet = name.split("_", 1)[-1].strip()
+        elif is_add_under:
+            child_from_sheet = None
+
+        reserved = set()
+        for idx in (i_page, i_parent, i_inst, i_child, i_title):
+            if idx is not None:
+                reserved.add(idx)
+
+        for r in ws.iter_rows(min_row=2, values_only=True):
+            if not r or all(c is None or str(c).strip() == "" for c in r):
+                continue
+            page = str(r[i_page] or "").strip() if i_page is not None else ""
+            parent = str(r[i_parent] or "").strip() if i_parent is not None else ""
+            if not parent and "_" in name and not is_add_under:
+                parent = name.split("_", 1)[0].strip()
+            child = str(r[i_child] or "").strip() if i_child is not None else ""
+            if not child:
+                child = child_from_sheet or ""
+            title = str(r[i_title] or "").strip() if i_title is not None else ""
+            if not title:
+                title = child
+            try:
+                inst = int(r[i_inst]) if i_inst is not None and r[i_inst] is not None else 1
+            except Exception:
+                inst = 1
+            if not page or not child:
+                continue
+            props = {}
+            for i, h in enumerate(headers):
+                if i in reserved:
+                    continue
+                if i >= len(r):
+                    break
+                val = r[i]
+                if val is None or str(val).strip() == "":
+                    continue
+                # map header back to field name (last part / as-is)
+                props[str(h).strip()] = val
+            if title:
+                props["cq:panelTitle"] = title
+            rows.append({
+                "sheet": name,
+                "page_path": page,
+                "parent_component": parent,
+                "parent_instance": inst,
+                "child_component": child,
+                "child_title": title or child,
+                "properties": props,
+            })
+    return {"status": "success", "rows": rows, "errors": errors}
+
+
 def parse_add_sheets(content: bytes) -> dict:
     """Parse 'Add *' sheets into component-add rows (CA component name + properties)."""
     wb = load_workbook(io.BytesIO(content), data_only=True)
@@ -866,6 +978,7 @@ def orchestrate_preview(content: bytes, username: str = None, session_id: str = 
     assets = plan_asset_uploads(content)
     pages = preview_pages(content)
     adds = parse_add_sheets(content)
+    add_under = parse_add_under_sheets(content)
     # Build will_exist early so SEO preview knows pages created in this batch
     will_exist_early = set()
     for plan in pages.get("plans") or []:
@@ -1237,6 +1350,100 @@ def orchestrate_apply(content: bytes, performed_by: str = "system") -> dict:
         }
     except Exception as e:
         results["components_add"] = {"status": "error", "message": str(e)}
+
+    # 3b) Nested children under Tabs/Accordion (Add under … sheets)
+    try:
+        under = parse_add_under_sheets(content)
+        under_results = []
+        add_svc = ComponentAddService()
+        from backend.app.services.page_service import PageService
+        from backend.app.services.aem_client import AEMClient
+        ps = PageService()
+        aem = AEMClient()
+        for row in under.get("rows") or []:
+            page_path = (row.get("page_path") or "").rstrip("/")
+            parent_name = row.get("parent_component") or ""
+            inst = int(row.get("parent_instance") or 1)
+            child_name = row.get("child_component") or ""
+            child_title = row.get("child_title") or child_name
+            entry = {**row, "status": "error", "errors": []}
+            if not page_path or not child_name:
+                entry["errors"].append("Missing page or child component")
+                under_results.append(entry)
+                continue
+            if not ps.path_exists(page_path):
+                entry["errors"].append("Page missing")
+                entry["status"] = "skipped"
+                under_results.append(entry)
+                continue
+            # Locate parent instance on page (same order as component list)
+            try:
+                comps = aem.get_components(page_path)
+                matches = []
+                for c in (comps.get("components") or []):
+                    rt = (c.get("resourceType") or "").lower()
+                    title = (c.get("title") or "").lower()
+                    path = c.get("path") or ""
+                    pn = parent_name.lower()
+                    if pn and (pn in rt or pn in title or pn in path.lower()):
+                        matches.append(c)
+                # Also match by last segment of resource type vs friendly name
+                if not matches and parent_name:
+                    for c in (comps.get("components") or []):
+                        rt = c.get("resourceType") or ""
+                        if rt.split("/")[-1].lower() == parent_name.lower().replace(" ", ""):
+                            matches.append(c)
+                if len(matches) < inst:
+                    entry["errors"].append(
+                        f"Parent '{parent_name}' instance {inst} not found (found {len(matches)})"
+                    )
+                    under_results.append(entry)
+                    continue
+                parent_path = matches[inst - 1].get("path")
+                res = add_svc.resolve_resource_type(child_name, page_path)
+                rt = res.get("resourceType") if isinstance(res, dict) else None
+                if not rt and isinstance(res, str):
+                    rt = res
+                if isinstance(res, dict) and res.get("status") == "error":
+                    entry["errors"].append(res.get("message") or "Cannot resolve child type")
+                    under_results.append(entry)
+                    continue
+                if not rt:
+                    # resolve_resource_type may return string or dict
+                    rt = res if isinstance(res, str) else (res or {}).get("resourceType")
+                if not rt:
+                    entry["errors"].append(f"Cannot resolve child component: {child_name}")
+                    under_results.append(entry)
+                    continue
+                props = dict(row.get("properties") or {})
+                if child_title:
+                    props["cq:panelTitle"] = child_title
+                created = add_svc.create_component(
+                    container_path=parent_path,
+                    resource_type=rt,
+                    properties=props,
+                    performed_by=performed_by,
+                )
+                entry["parent_path"] = parent_path
+                entry["result"] = created
+                entry["status"] = created.get("status") or "error"
+                if entry["status"] != "success":
+                    entry["errors"].append(created.get("message") or "Create child failed")
+            except Exception as ex:
+                entry["errors"].append(str(ex))
+            under_results.append(entry)
+        ok = sum(1 for x in under_results if x.get("status") == "success")
+        err = sum(1 for x in under_results if x.get("status") == "error")
+        results["components_add_under"] = {
+            "status": "success" if err == 0 and under_results else (
+                "skipped" if not under_results else ("partial" if ok else "error")
+            ),
+            "rows": under_results,
+            "parse_errors": under.get("errors") or [],
+            "message": f"Nested children — ok: {ok}, errors: {err}",
+        }
+    except Exception as e:
+        results["components_add_under"] = {"status": "error", "message": str(e)}
 
     # 4) SEO + component UPDATE
     try:

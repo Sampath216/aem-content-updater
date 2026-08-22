@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from backend.app.services.aem_client import AEMClient
 from backend.app.services.excel_bulk_service import normalize_props
+from backend.app.services.audit_service import write_audit, ACTION_COMPONENT_ADD
 
 LAYOUT_HINTS = (
     "responsivegrid",
@@ -356,7 +357,240 @@ class ComponentAddService:
     # -------------------------------------------------------------------------
     # Name → resourceType
     # -------------------------------------------------------------------------
+
+    def _walk_cq_components(self, base_path: str, depth: int = 0, max_depth: int = 8) -> List[dict]:
+        """Recursively find cq:Component nodes under /apps (dynamic, not project-hardcoded)."""
+        found: List[dict] = []
+        if depth > max_depth or not base_path:
+            return found
+        try:
+            data = self._load_json(base_path) or {}
+        except Exception:
+            return found
+        if not isinstance(data, dict):
+            return found
+        primary = str(data.get("jcr:primaryType") or "")
+        group = data.get("componentGroup")
+        title = data.get("jcr:title") or data.get("jcr:description") or base_path.rstrip("/").split("/")[-1]
+        # Component definition node
+        if primary == "cq:Component" or (
+            data.get("sling:resourceSuperType") and "components" in base_path.replace("\\", "/")
+        ):
+            # resourceType is path under /apps without /apps/ prefix
+            rel = base_path
+            if rel.startswith("/apps/"):
+                rel = rel[len("/apps/"):]
+            elif rel.startswith("/libs/"):
+                rel = rel[len("/libs/"):]
+            # skip hidden
+            if group is not None and str(group).strip() == ".hidden":
+                pass
+            else:
+                found.append({
+                    "resourceType": rel,
+                    "label": title,
+                    "componentGroup": group,
+                    "path": base_path,
+                    "source": "apps_scan",
+                })
+        # walk children (skip heavy subtrees)
+        skip_names = {
+            "cq:dialog", "cq:editor", "cq:editConfig", "cq:design_dialog",
+            "cq:htmlTag", "cq:infoProviders", "cq:childEditors", "_jcr_content",
+        }
+        for key, val in data.items():
+            if key.startswith("jcr:") or key.startswith("sling:") or key.startswith("cq:"):
+                continue
+            if key in skip_names:
+                continue
+            if not isinstance(val, dict):
+                continue
+            child_path = f"{base_path.rstrip('/')}/{key}"
+            found.extend(self._walk_cq_components(child_path, depth + 1, max_depth))
+        return found
+
+    def discover_project_components(
+        self,
+        page_path: Optional[str] = None,
+        apps_roots: Optional[List[str]] = None,
+        include_apps_scan: bool = True,
+        sync_dictionary: bool = True,
+        max_dialog_fetch: int = 80,
+    ) -> dict:
+        """
+        Dynamic component list for template creation — NOT limited to previously used pages.
+        Sources (merged):
+          1) Allowed list from page container policy / siblings / ancestors (if page_path given)
+          2) Scan /apps (and optional roots) for cq:Component (exclude componentGroup=.hidden)
+        Optionally resolve dialog fields per resourceType and sync into dictionary (all labels).
+        """
+        from backend.app.services.dictionary_service import sync_from_catalog_fields, upsert_component
+
+        merged: dict = {}
+        sources_used = []
+
+        # (1) Policy / page based
+        if page_path:
+            try:
+                allowed = self.get_allowed_components(page_path)
+                for f in allowed.get("allowed_for_ca") or []:
+                    rt = f.get("resourceType")
+                    if not rt:
+                        continue
+                    merged[rt] = {
+                        "resourceType": rt,
+                        "label": f.get("name") or rt.split("/")[-1],
+                        "source": allowed.get("strict_source") or "policy",
+                    }
+                sources_used.append(allowed.get("strict_source") or "page_allowed")
+            except Exception as e:
+                sources_used.append(f"page_allowed_error:{e}")
+
+        # (2) Apps scan — full project palette
+        if include_apps_scan:
+            roots = apps_roots or ["/apps"]
+            # Prefer project-ish folders under /apps first if page_path suggests site
+            if page_path and page_path.startswith("/content/"):
+                parts = [p for p in page_path.split("/") if p]
+                # /content/we-retail/... → try /apps/weretail
+                if len(parts) >= 2:
+                    site = parts[1]
+                    # common patterns: we-retail → weretail
+                    candidates = [
+                        f"/apps/{site}",
+                        f"/apps/{site.replace('-', '')}",
+                        f"/apps/{site.replace('-', '/')}",
+                    ]
+                    for c in candidates:
+                        if c not in roots:
+                            roots.insert(0, c)
+            scan_found = []
+            for root in roots:
+                if self.path_exists(root):
+                    scan_found.extend(self._walk_cq_components(root))
+            for item in scan_found:
+                rt = item["resourceType"]
+                if rt not in merged:
+                    merged[rt] = item
+                else:
+                    # keep label if better
+                    if item.get("label") and len(str(item["label"])) > len(str(merged[rt].get("label") or "")):
+                        merged[rt]["label"] = item["label"]
+            sources_used.append(f"apps_scan:{len(scan_found)}")
+
+        # (3) Dialog fields + dictionary sync
+        components_out = []
+        dict_synced = []
+        dialog_errors = []
+        aem = self.aem
+        count = 0
+        for rt, meta in sorted(merged.items(), key=lambda x: (x[1].get("label") or x[0]).lower()):
+            label = meta.get("label") or rt.split("/")[-1]
+            field_names: List[str] = []
+            is_children_editor = any(
+                x in (rt or "").lower() for x in ("/tabs", "/accordion", "/carousel")
+            )
+            if count < max_dialog_fetch:
+                try:
+                    dlg = aem.get_dialog_fields_for_resource_type(rt)
+                    fields = dlg.get("fields") or []
+                    if isinstance(fields, list):
+                        for f in fields:
+                            if isinstance(f, dict) and f.get("name"):
+                                field_names.append(f["name"])
+                            elif isinstance(f, str):
+                                field_names.append(f)
+                    elif isinstance(fields, dict):
+                        field_names = list(fields.keys())
+                    # Multifields (Items, actions, etc.) — must not be dropped
+                    for mf in dlg.get("multifields") or []:
+                        if isinstance(mf, dict) and mf.get("name"):
+                            field_names.append(mf["name"])
+                            for it in mf.get("itemFields") or []:
+                                if isinstance(it, dict) and it.get("name"):
+                                    field_names.append(f"{mf['name']}.{it['name']}")
+                    # Tab-scoped fields
+                    for tab in dlg.get("tabs") or []:
+                        for f in (tab.get("fields") or []) if isinstance(tab, dict) else []:
+                            if isinstance(f, dict) and f.get("name"):
+                                field_names.append(f["name"])
+                    # Children Editor containers (Tabs/Accordion/Carousel/custom):
+                    # dialog often only has hidden activeItem — still expose items + activeItem
+                    try:
+                        import json as _json
+                        blob = _json.dumps(dlg).lower()
+                    except Exception:
+                        blob = ""
+                    rt_l = (rt or "").lower()
+                    is_children_editor = (
+                        "childreneditor" in blob
+                        or "children-editor" in blob
+                        or any(x in rt_l for x in ("/tabs", "/accordion", "/carousel"))
+                    )
+                    if is_children_editor:
+                        for must in ("items", "activeItem"):
+                            if must not in field_names:
+                                field_names.append(must)
+                    # dedupe preserve order; never put child resourceTypes as parent fields
+                    skip_as_parent_field = {"sling:resourcetype", "nodename"}
+                    seen = set()
+                    uniq = []
+                    for n in field_names:
+                        if not n or n.lower() in skip_as_parent_field:
+                            continue
+                        if n not in seen:
+                            seen.add(n)
+                            uniq.append(n)
+                    field_names = uniq
+                    count += 1
+                except Exception as e:
+                    dialog_errors.append({"resourceType": rt, "error": str(e)})
+                    is_children_editor = False
+            else:
+                is_children_editor = False
+            # flag for template UI (nested children under Tabs etc.)
+            supports_children = False
+            try:
+                supports_children = bool(is_children_editor)
+            except Exception:
+                supports_children = any(
+                    x in (rt or "").lower() for x in ("/tabs", "/accordion", "/carousel")
+                )
+            if sync_dictionary and field_names:
+                try:
+                    sync_from_catalog_fields(rt, label, field_names)
+                    dict_synced.append(rt)
+                except Exception as e:
+                    dialog_errors.append({"resourceType": rt, "error": f"dict:{e}"})
+            components_out.append({
+                "resourceType": rt,
+                "label": label,
+                "componentGroup": meta.get("componentGroup"),
+                "source": meta.get("source"),
+                "supportsChildren": supports_children,
+                "fields": [
+                    {"field_name": fn, "ca_labels": [fn], "preferred": fn}
+                    for fn in field_names
+                ],
+                "field_count": len(field_names),
+            })
+
+        return {
+            "status": "success",
+            "page_path": page_path,
+            "component_count": len(components_out),
+            "dictionary_synced": len(dict_synced),
+            "sources": sources_used,
+            "components": components_out,
+            "dialog_errors": dialog_errors[:20],
+            "message": (
+                f"Discovered {len(components_out)} component type(s); "
+                f"synced {len(dict_synced)} into dictionary with dialog field labels."
+            ),
+        }
+
     def resolve_resource_type(
+
         self, component_name: str, page_path: Optional[str] = None
     ) -> dict:
         """
@@ -445,6 +679,7 @@ class ComponentAddService:
         node_name: Optional[str] = None,
         properties: Optional[Dict[str, Any]] = None,
         order_index: int = 1,
+        performed_by: str = "system",
     ) -> dict:
         container_path = container_path.rstrip("/")
         if not self.path_exists(container_path):
@@ -490,10 +725,19 @@ class ComponentAddService:
             if props:
                 try:
                     self.aem.update_component(
-                        target, props, performed_by="component-add"
+                        target, props, performed_by=performed_by or "component-add"
                     )
                 except Exception:
                     pass
+            write_audit(
+                component_path=target,
+                property_name=ACTION_COMPONENT_ADD,
+                old_value=None,
+                new_value=rt,
+                success=True,
+                message=f"Component added: {rt} under {container_path}",
+                performed_by=performed_by,
+            )
             return {
                 "status": "success",
                 "path": target,
@@ -504,6 +748,13 @@ class ComponentAddService:
                 "created": True,
             }
         except Exception as e:
+            write_audit(
+                component_path=target if "target" in dir() else container_path,
+                property_name=ACTION_COMPONENT_ADD,
+                success=False,
+                message=str(e),
+                performed_by=performed_by,
+            )
             return {"status": "error", "message": str(e), "path": target}
 
     def plan_add(self, page_path: str, components: List[dict]) -> dict:
@@ -593,7 +844,7 @@ class ComponentAddService:
             "errors": errors,
         }
 
-    def apply_add(self, page_path: str, components: List[dict]) -> dict:
+    def apply_add(self, page_path: str, components: List[dict], performed_by: str = "system") -> dict:
         preview = self.plan_add(page_path, components)
         if preview.get("status") == "error":
             return preview
@@ -619,6 +870,7 @@ class ComponentAddService:
                 node_name=item.get("node_name"),
                 properties=normalize_props(item.get("properties") or {}),
                 order_index=item.get("order") or 1,
+             performed_by=performed_by,
             )
             r["order"] = item.get("order")
             r["component_name"] = item.get("component_name")

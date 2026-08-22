@@ -16,6 +16,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from backend.app.services.aem_client import AEMClient
+from backend.app.services.audit_service import write_audit, ACTION_PAGE_CREATE, ACTION_PAGE_FOLDER
 
 
 def normalize_content_path(path: str) -> str:
@@ -442,6 +443,7 @@ class PageService:
         title: str,
         template_path: str,
         resource_type: Optional[str] = None,
+        performed_by: str = "system",
     ) -> dict:
         parent_path = parent_path.rstrip("/")
         node = adobe_page_name(name)
@@ -471,6 +473,15 @@ class PageService:
                 timeout=self.timeout,
             )
             if r.status_code in (200, 201) and self.path_exists(target):
+                write_audit(
+                    component_path=target,
+                    property_name=ACTION_PAGE_CREATE,
+                    old_value=None,
+                    new_value=template_path,
+                    success=True,
+                    message="Page created (wcmcommand): " + target,
+                    performed_by=performed_by,
+                )
                 return {
                     "status": "success",
                     "path": target,
@@ -493,6 +504,15 @@ class PageService:
         try:
             r2 = self.session.post(f"{self.base_url}{parent_path}", data=data, timeout=self.timeout)
             if r2.status_code in (200, 201) and self.path_exists(target):
+                write_audit(
+                    component_path=target,
+                    property_name=ACTION_PAGE_CREATE,
+                    old_value=None,
+                    new_value=template_path,
+                    success=True,
+                    message="Page created (sling): " + target,
+                    performed_by=performed_by,
+                )
                 return {
                     "status": "success",
                     "path": target,

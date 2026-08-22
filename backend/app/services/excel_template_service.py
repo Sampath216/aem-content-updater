@@ -187,6 +187,47 @@ def generate_template(
         "  • Do not change header row text",
         "  • Use Preview in the tool before Apply",
         "  • For Hero-like components with one image field, prefer the desktop DAM asset path",
+        "",
+        "MULTIFIELD COLUMNS (normal dialog multifields — e.g. actions, links)",
+        "  • Column name = multifield name from the tool (example: actions)",
+        "  • One Excel cell can hold multiple values separated by |  (pipe)",
+        "    Example: Link A|/content/path-a|Link B|/content/path-b",
+        "  • For composite items (link + text), use: text1~path1|text2~path2",
+        "  • Leave cell blank to skip that field",
+        "",
+        "CHILDREN EDITOR / ITEMS (Tabs, Accordion, Carousel, custom containers)",
+        "  • These are CHILD COMPONENTS, not a simple text field",
+        "  • Column 'items' or 'Items' updates panel titles only",
+        "  • Format: Title1~nodeName1|Title2~nodeName2",
+        "    Example: Tab 1~item_1|Tab 2~item_2|Title~item_1787366290550",
+        "  • nodeName must already exist on the page (tool does not invent structure in bulk)",
+        "  • To author fields INSIDE a child (Title text, image, …), use that component sheet",
+        "    on the child path context or open the child in the UI (Open button)",
+        "  • Do NOT put sling:resourceType values as content — they identify component type only",
+        "",
+        "NESTED CHILDREN UNDER PARENT CONTAINERS (sheets named Parent_Child)",
+        "  • First add the parent (Add Tabs sheet) on the page",
+        "  • Then use sheets named like tabs_Title, tabs_Hero Image (Parent_Child)",
+        "  • Columns: Page Path | Parent Component | Parent Instance | Child Title | + all fields of that child component",
+        "  • Parent Instance = 1 for first Tabs on that page",
+        "  • Child Component Name = Title, Teaser, … (allowed component name)",
+        "  • Child Title = panel title shown on the tab (cq:panelTitle)",
+        "  • Row order = order of tabs / panels",
+        "  • Preview shows parent path + children to create; Apply creates parent then children inside it",
+        "",
+        "FIELD TYPES CHEAT SHEET",
+        "  • Text / path / number → type value in the cell",
+        "  • Checkbox / boolean → true or false (or Y / N)",
+        "  • Dropdown / select → use option value (or visible label; tool maps when possible)",
+        "  • Multifield → value1|value2|value3",
+        "  • Composite multifield → a~b|c~d",
+        "  • Image / fileReference → DAM path after Assets sheet upload",
+        "  • Children Items titles → Title1~item_1|Title2~item_2 (update existing children)",
+        "  • Active Item → child node name (item_1) or leave blank for Default",
+        "",
+        "DICTIONARY",
+        "  • Field labels sync from dialogs; child components are separate dictionary entries",
+        "  • Parent container does not store child field lists as its own columns",
     ]
     for i, line in enumerate(how_lines, 1):
         ws_h.cell(i, 1, line)
@@ -249,7 +290,7 @@ def generate_template(
         _empty_rows(ws, headers, thin, 6)
 
 
-    # 5. Components Add sheets — per selection include_add
+    # 5. Components Add sheets + nested "Add under …" sheets
     for sel in selections:
         if not isinstance(sel, dict):
             continue
@@ -261,20 +302,64 @@ def generate_template(
             want_add = bool(include_components_add)
         if include_pages and sel.get("include_add") is None:
             want_add = True
-        if not want_add:
+        nested = sel.get("nested_children") or sel.get("nestedChildren") or []
+        # Selecting nested children implies parent Add is needed
+        if nested:
+            want_add = True
+        if not want_add and not nested:
             continue
         label = str(sel.get("label") or (rt.split("/")[-1] if rt else "Component"))[:20]
-        ws = wb.create_sheet(_unique_sheet_name(wb, f"Add {label}"))
         fields = sel.get("fields") or []
-        headers = ["Page Path", "Component Name"]
-        for fn in fields:
-            headers.append(_field_header(data, rt, str(fn)))
-        _style_header(ws, headers, header_fill, header_font, thin)
-        _empty_rows(ws, headers, thin, 6)
-        ws.cell(2, 1, "/content/we-retail/us/en/men/test")
-        ws.cell(2, 2, label)
-        for c in range(1, 3):
-            ws.cell(2, c).font = example_font
+        # Ensure container fields useful for Tabs appear on Add sheet
+        field_list = [str(fn) for fn in fields]
+        for must in ("items", "activeItem"):
+            if must not in field_list and (
+                "tabs" in (rt or "").lower()
+                or "accordion" in (rt or "").lower()
+                or "carousel" in (rt or "").lower()
+                or nested
+            ):
+                field_list.append(must)
+
+        if want_add:
+            ws = wb.create_sheet(_unique_sheet_name(wb, f"Add {label}"))
+            headers = ["Page Path", "Component Name"]
+            for fn in field_list:
+                headers.append(_field_header(data, rt, str(fn)))
+            _style_header(ws, headers, header_fill, header_font, thin)
+            _empty_rows(ws, headers, thin, 6)
+            ws.cell(2, 1, "/content/we-retail/us/en/men/test")
+            ws.cell(2, 2, label)
+            for c in range(1, 3):
+                ws.cell(2, c).font = example_font
+
+        # One sheet per parent+child with FULL child field columns (CA-friendly authoring)
+        # Sheet name: {Parent}_{Child}  e.g. tabs_Title, tabs_Hero Image
+        if nested:
+            for ch in nested:
+                if not isinstance(ch, dict):
+                    continue
+                ch_label = str(ch.get("label") or ch.get("name") or ch.get("resourceType") or "Child")
+                ch_rt = str(ch.get("resourceType") or "")
+                ch_fields = ch.get("fields") or []
+                sheet_title = _unique_sheet_name(wb, f"{label}_{ch_label}"[:28])
+                ws_n = wb.create_sheet(sheet_title)
+                n_headers = [
+                    "Page Path",
+                    "Parent Component",
+                    "Parent Instance",
+                    "Child Title",
+                ]
+                for fn in ch_fields:
+                    n_headers.append(_field_header(data, ch_rt, str(fn)))
+                _style_header(ws_n, n_headers, header_fill, header_font, thin)
+                _empty_rows(ws_n, n_headers, thin, 6)
+                ws_n.cell(2, 1, "/content/we-retail/us/en/men/test")
+                ws_n.cell(2, 2, label)
+                ws_n.cell(2, 3, 1)
+                ws_n.cell(2, 4, ch_label)  # default panel title
+                for c in range(1, 5):
+                    ws_n.cell(2, c).font = example_font
 
     # 6. Component UPDATE sheets
     # Update sheets (Instance) — per selection include_update; never when include_pages
